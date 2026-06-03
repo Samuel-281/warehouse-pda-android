@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.warehouse.pda.app-mergeDebugResources-46:/values-v30/values-v30.xml",
+            "map": [
+                {
+                    "source": "/Users/suhengtan/.gradle/caches/9.3.0/transforms/8afd9a3856b243981f8457f9228496f7/transformed/material3-release/res/values-v30/values-v30.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "72",
+                        "endOffsets": "123"
+                    }
+                }
+            ]
+        }
+    ]
+}
