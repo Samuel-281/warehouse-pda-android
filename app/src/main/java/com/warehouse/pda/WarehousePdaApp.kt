@@ -578,14 +578,10 @@ private fun OperationConfigScreen(uiState: AppUiState, operation: PdaOperation, 
   ) {
     Text(operation.title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
     Text("请选择作业参数并确认目标仓库，准备扫码。", color = MutedText)
-    ConfigSectionCard("1. 作业类型") {
-      if (operation.group == OperationGroup.Inbound) {
-        RadioLikeRow("厂家到货", operation == PdaOperation.FactoryInbound)
-        RadioLikeRow("终端退换货", operation == PdaOperation.TerminalInbound)
-        RadioLikeRow("销售退回", operation == PdaOperation.SalesReturn)
-      } else {
-        RadioLikeRow("挪仓", operation == PdaOperation.Transfer)
-        RadioLikeRow("销售出库", operation == PdaOperation.SalesOutbound)
+    ConfigSectionCard("当前作业") {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(operation.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        Text(operation.description, color = MutedText)
       }
     }
     OperationFields(
@@ -653,11 +649,10 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
       }
     ) {
       ContextStrip(operation, form, masterData)
-      ScanHero(
+      ScanStatusCard(
         countLabel = "已扫",
         countValue = barcodeList.size.toString(),
-        title = "准备扫描",
-        subtitle = "请将条码对准扫码枪或在此处输入"
+        subtitle = "请直接使用扫码头录入，或在下方输入条码。"
       )
       ScanInputRow(
         value = barcodeInput,
@@ -1186,6 +1181,46 @@ private fun ScanHero(
             .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
           Text("$countLabel: $countValue", color = BluePrimary, fontWeight = FontWeight.Bold)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ScanStatusCard(
+  countLabel: String?,
+  countValue: String?,
+  subtitle: String
+) {
+  Card(
+    shape = RoundedCornerShape(20.dp),
+    colors = CardDefaults.cardColors(containerColor = Color.White)
+  ) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .border(1.dp, CardBorder, RoundedCornerShape(20.dp))
+        .padding(horizontal = 18.dp, vertical = 16.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("扫码状态", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+        Text(subtitle, color = MutedText)
+      }
+      if (!countLabel.isNullOrBlank() && !countValue.isNullOrBlank()) {
+        Column(
+          horizontalAlignment = Alignment.End,
+          verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+          Text(countLabel, color = MutedText, style = MaterialTheme.typography.labelLarge)
+          Text(
+            countValue,
+            color = BluePrimary,
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Black
+          )
         }
       }
     }
