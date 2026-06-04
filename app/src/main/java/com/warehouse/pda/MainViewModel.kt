@@ -389,8 +389,8 @@ class MainViewModel(
     _uiState.update { state -> state.copy(formState = transform(state.formState).normalized()) }
   }
 
-  fun addBarcodes(operation: PdaOperation) {
-    val input = _uiState.value.barcodeInputs[operation].orEmpty()
+  fun addBarcodes(operation: PdaOperation, rawInput: String? = null) {
+    val input = rawInput ?: _uiState.value.barcodeInputs[operation].orEmpty()
     val candidates = parseBarcodes(input)
     if (candidates.isEmpty()) return
 
@@ -454,8 +454,8 @@ class MainViewModel(
     }
   }
 
-  fun queryBarcode() {
-    val barcode = _uiState.value.queryForm.barcodeInput.trim()
+  fun queryBarcode(rawInput: String? = null) {
+    val barcode = (rawInput ?: _uiState.value.queryForm.barcodeInput).trim()
     if (barcode.isBlank()) {
       _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请输入条码")) }
       return

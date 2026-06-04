@@ -27,6 +27,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ArrowBack
@@ -80,7 +82,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontWeight
@@ -448,7 +456,7 @@ private fun QueryScreen(uiState: AppUiState, viewModel: MainViewModel) {
       value = uiState.queryForm.barcodeInput,
       onValueChange = viewModel::updateQueryInput,
       loading = uiState.queryForm.loading,
-      onSearch = viewModel::queryBarcode,
+      onSearch = { viewModel.queryBarcode(it) },
       onClear = viewModel::clearQueryResult
     )
     if (uiState.queryForm.loading) {
@@ -657,7 +665,7 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
       ScanInputRow(
         value = barcodeInput,
         onValueChange = { viewModel.updateBarcodeInput(operation, it) },
-        onAdd = { viewModel.addBarcodes(operation) },
+        onAdd = { viewModel.addBarcodes(operation, it) },
         onClear = { viewModel.clearBarcodes(operation) }
       )
       ScanListCard(
@@ -1232,17 +1240,24 @@ private fun QueryInputRow(
   value: String,
   onValueChange: (String) -> Unit,
   loading: Boolean,
-  onSearch: () -> Unit,
+  onSearch: (String) -> Unit,
   onClear: () -> Unit
 ) {
   Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
     OutlinedTextField(
       value = value,
-      onValueChange = onValueChange,
-      modifier = Modifier.weight(1f),
+      onValueChange = { nextValue ->
+        handleScannerTextChange(nextValue, onValueChange, onSearch)
+      },
+      modifier = Modifier
+        .weight(1f)
+        .submitOnScannerEnter(value, onSearch),
       label = { Text("输入条码") },
       placeholder = { Text("扫码枪输入后可直接查询") },
       shape = RoundedCornerShape(16.dp),
+      singleLine = true,
+      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+      keyboardActions = KeyboardActions(onSearch = { onSearch(value) }, onDone = { onSearch(value) }),
       trailingIcon = {
         if (value.isNotBlank()) {
           IconButton(onClick = onClear) {
@@ -1252,7 +1267,7 @@ private fun QueryInputRow(
       }
     )
     Button(
-      onClick = onSearch,
+      onClick = { onSearch(value) },
       enabled = !loading,
       shape = RoundedCornerShape(16.dp),
       colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
@@ -1271,17 +1286,24 @@ private fun QueryInputRow(
 private fun ScanInputRow(
   value: String,
   onValueChange: (String) -> Unit,
-  onAdd: () -> Unit,
+  onAdd: (String) -> Unit,
   onClear: () -> Unit
 ) {
   Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
     OutlinedTextField(
       value = value,
-      onValueChange = onValueChange,
-      modifier = Modifier.weight(1f),
+      onValueChange = { nextValue ->
+        handleScannerTextChange(nextValue, onValueChange, onAdd)
+      },
+      modifier = Modifier
+        .weight(1f)
+        .submitOnScannerEnter(value, onAdd),
       label = { Text("输入条码") },
       shape = RoundedCornerShape(12.dp),
       placeholder = { Text("输入条码...") },
+      singleLine = true,
+      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+      keyboardActions = KeyboardActions(onDone = { onAdd(value) }),
       trailingIcon = {
         if (value.isNotBlank()) {
           IconButton(onClick = onClear) {
@@ -1291,13 +1313,41 @@ private fun ScanInputRow(
       }
     )
     Button(
-      onClick = onAdd,
+      onClick = { onAdd(value) },
       shape = RoundedCornerShape(12.dp),
       colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
       modifier = Modifier.height(56.dp)
     ) {
       Text("加入", color = Color.White, fontWeight = FontWeight.Bold)
     }
+  }
+}
+
+private fun Modifier.submitOnScannerEnter(value: String, onSubmit: (String) -> Unit): Modifier {
+  return onPreviewKeyEvent { event ->
+    if (
+      event.type == KeyEventType.KeyDown &&
+      (event.key == Key.Enter || event.key == Key.NumPadEnter)
+    ) {
+      onSubmit(value)
+      true
+    } else {
+      false
+    }
+  }
+}
+
+private fun handleScannerTextChange(
+  nextValue: String,
+  onValueChange: (String) -> Unit,
+  onSubmit: (String) -> Unit
+) {
+  val cleaned = nextValue.replace("\r", "").replace("\n", "").trim()
+  if (nextValue.contains('\n') || nextValue.contains('\r')) {
+    onValueChange(cleaned)
+    onSubmit(cleaned)
+  } else {
+    onValueChange(nextValue)
   }
 }
 
