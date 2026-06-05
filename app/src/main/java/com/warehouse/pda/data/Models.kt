@@ -145,6 +145,7 @@ data class OutboundSubmitRequest(
   val targetWarehouseId: String? = null,
   val targetLocationId: String? = null,
   val salespersonId: String? = null,
+  val goodsId: String? = null,
   val barcodes: List<String>
 )
 
@@ -156,6 +157,7 @@ data class SalesReturnSubmitRequest(
 
 data class SubmitResult(
   val orderId: String,
+  val inboundOrderId: String? = null,
   val items: List<InventoryItem>
 )
 

@@ -1094,6 +1094,54 @@ private fun OperationFields(
       }
     }
 
+    PdaOperation.DirectOutbound -> {
+      ConfigSectionCard("2. 直接出库配置") {
+        DropdownField("出库仓库", form.directSourceWarehouseId, warehouses.map { it.id to it.name }) { selected ->
+          onUpdate { current: OperationFormState ->
+            val target = warehouses.firstOrNull { record -> record.id != selected }?.id.orEmpty()
+            current.copy(
+              directSourceWarehouseId = selected,
+              directTargetWarehouseId = if (current.directTargetWarehouseId == selected) target else current.directTargetWarehouseId,
+              directTargetLocationId = firstLocationId(
+                if (current.directTargetWarehouseId == selected) target else current.directTargetWarehouseId,
+                locations
+              )
+            )
+          }
+        }
+        DropdownField("货物", form.directGoodsId, goods.map { it.id to "${it.name} (${it.code})" }) { selected ->
+          onUpdate { current: OperationFormState -> current.copy(directGoodsId = selected) }
+        }
+        DropdownField(
+          "出库去向",
+          form.directDestinationType,
+          listOf("sales" to "分配销售人员", "warehouse" to "发往目标仓库")
+        ) { selected ->
+          onUpdate { current: OperationFormState -> current.copy(directDestinationType = selected) }
+        }
+      }
+      ConfigSectionCard("3. 去向信息") {
+        if (form.directDestinationType == "warehouse") {
+          DropdownField("目标仓库", form.directTargetWarehouseId, warehouses.filter { it.id != form.directSourceWarehouseId }.map { it.id to it.name }) { selected ->
+            onUpdate { current: OperationFormState ->
+              current.copy(
+                directTargetWarehouseId = selected,
+                directTargetLocationId = firstLocationId(selected, locations)
+              )
+            }
+          }
+          DropdownField("目标库位", form.directTargetLocationId, locations.filter { it.warehouseId == form.directTargetWarehouseId }.map { it.id to it.name }) { selected ->
+            onUpdate { current: OperationFormState -> current.copy(directTargetLocationId = selected) }
+          }
+        } else {
+          DropdownField("销售人员", form.directSalespersonId, salespeople.map { it.id to "${it.name} (${it.code})" }) { selected ->
+            onUpdate { current: OperationFormState -> current.copy(directSalespersonId = selected) }
+          }
+        }
+        StatusBanner("直接出库会把新条码自动登记入库，再立即完成出库流转。", MessageTone.Info)
+      }
+    }
+
     PdaOperation.SalesReturn -> {
       ConfigSectionCard("2. 回流仓库配置") {
         DropdownField("回流仓库", form.returnWarehouseId, warehouses.map { it.id to it.name }) { selected ->
@@ -1138,6 +1186,12 @@ private fun ContextStrip(operation: PdaOperation, form: OperationFormState, mast
     PdaOperation.SalesOutbound -> listOf(
       operation.title,
       warehouseName(warehouses, form.salesWarehouseId)
+    )
+    PdaOperation.DirectOutbound -> listOf(
+      operation.title,
+      warehouseName(warehouses, form.directSourceWarehouseId),
+      goodsName(goods, form.directGoodsId),
+      if (form.directDestinationType == "warehouse") warehouseName(warehouses, form.directTargetWarehouseId) else "分配销售"
     )
     PdaOperation.SalesReturn -> listOf(
       operation.title,
@@ -1532,6 +1586,7 @@ private fun HubOperationCard(
               PdaOperation.SalesReturn -> Icons.Outlined.CallReceived
               PdaOperation.Transfer -> Icons.Outlined.CallSplit
               PdaOperation.SalesOutbound -> Icons.Outlined.Logout
+              PdaOperation.DirectOutbound -> Icons.Outlined.Logout
             },
             contentDescription = null,
             tint = accentColor
@@ -1611,6 +1666,7 @@ private fun submitLabel(operation: PdaOperation): String {
     PdaOperation.TerminalInbound -> "入库"
     PdaOperation.Transfer -> "挪仓"
     PdaOperation.SalesOutbound -> "出库"
+    PdaOperation.DirectOutbound -> "直接出库"
     PdaOperation.SalesReturn -> "回流"
   }
 }

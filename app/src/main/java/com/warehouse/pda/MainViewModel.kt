@@ -40,7 +40,8 @@ enum class PdaOperation(
   TerminalInbound("终端退换货", "登记生产日期并扫码回仓", OperationGroup.Inbound),
   SalesReturn("销售退回", "将销售人员名下条码回流仓库", OperationGroup.Inbound),
   Transfer("挪仓", "从源仓扫码转入目标仓", OperationGroup.Outbound),
-  SalesOutbound("销售出库", "扫码转入销售人员名下", OperationGroup.Outbound)
+  SalesOutbound("销售出库", "扫码转入销售人员名下", OperationGroup.Outbound),
+  DirectOutbound("直接出库", "新条码登记后立即发往仓库或销售", OperationGroup.Outbound)
 }
 
 enum class MainTab(val title: String) {
@@ -79,6 +80,12 @@ data class OperationFormState(
   val transferTargetLocationId: String = "",
   val salesWarehouseId: String = "",
   val salesSalespersonId: String = "",
+  val directSourceWarehouseId: String = "",
+  val directGoodsId: String = "",
+  val directDestinationType: String = "sales",
+  val directTargetWarehouseId: String = "",
+  val directTargetLocationId: String = "",
+  val directSalespersonId: String = "",
   val returnWarehouseId: String = "",
   val returnLocationId: String = ""
 )
@@ -645,6 +652,19 @@ class MainViewModel(
         )
       )
 
+      PdaOperation.DirectOutbound -> repository.submitOutbound(
+        serverUrl,
+        OutboundSubmitRequest(
+          type = "direct",
+          sourceWarehouseId = formState.directSourceWarehouseId,
+          goodsId = formState.directGoodsId,
+          targetWarehouseId = if (formState.directDestinationType == "warehouse") formState.directTargetWarehouseId else null,
+          targetLocationId = if (formState.directDestinationType == "warehouse") formState.directTargetLocationId else null,
+          salespersonId = if (formState.directDestinationType == "sales") formState.directSalespersonId else null,
+          barcodes = barcodes
+        )
+      )
+
       PdaOperation.SalesReturn -> repository.submitSalesReturn(
         serverUrl,
         SalesReturnSubmitRequest(
@@ -697,6 +717,12 @@ class MainViewModel(
         mode = "warehouse_outbound",
         barcodes = barcodes,
         warehouseId = formState.salesWarehouseId
+      )
+
+      PdaOperation.DirectOutbound -> BarcodeValidationRequest(
+        mode = "factory_inbound",
+        barcodes = barcodes,
+        goodsId = formState.directGoodsId
       )
 
       PdaOperation.SalesReturn -> BarcodeValidationRequest(
@@ -773,6 +799,9 @@ class MainViewModel(
       val transferTarget = warehouses.firstOrNull { it.id == current.transferTargetWarehouseId && it.id != transferSource }?.id
         ?: warehouses.firstOrNull { it.id != transferSource }?.id.orEmpty()
       val salesWarehouseId = existingWarehouse(current.salesWarehouseId.ifBlank { factoryWarehouseId })
+      val directSourceWarehouseId = existingWarehouse(current.directSourceWarehouseId.ifBlank { salesWarehouseId })
+      val directTargetWarehouseId = warehouses.firstOrNull { it.id == current.directTargetWarehouseId && it.id != directSourceWarehouseId }?.id
+        ?: warehouses.firstOrNull { it.id != directSourceWarehouseId }?.id.orEmpty()
       val returnWarehouseId = existingWarehouse(current.returnWarehouseId.ifBlank { factoryWarehouseId })
 
       return current.copy(
@@ -788,6 +817,12 @@ class MainViewModel(
         transferTargetLocationId = existingLocation(transferTarget, current.transferTargetLocationId),
         salesWarehouseId = salesWarehouseId,
         salesSalespersonId = existingSales(current.salesSalespersonId),
+        directSourceWarehouseId = directSourceWarehouseId,
+        directGoodsId = existingGoods(current.directGoodsId),
+        directDestinationType = if (current.directDestinationType == "warehouse") "warehouse" else "sales",
+        directTargetWarehouseId = directTargetWarehouseId,
+        directTargetLocationId = existingLocation(directTargetWarehouseId, current.directTargetLocationId),
+        directSalespersonId = existingSales(current.directSalespersonId),
         returnWarehouseId = returnWarehouseId,
         returnLocationId = existingLocation(returnWarehouseId, current.returnLocationId)
       )
