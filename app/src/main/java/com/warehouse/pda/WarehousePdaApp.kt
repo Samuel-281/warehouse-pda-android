@@ -2,6 +2,8 @@ package com.warehouse.pda
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -74,6 +76,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -116,11 +119,24 @@ private val SuccessGreen = Color(0xFF16B37E)
 fun WarehousePdaRoot(viewModel: MainViewModel) {
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
   val snackbarHostState = remember { SnackbarHostState() }
+  val toneGenerator = remember { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90) }
+
+  DisposableEffect(Unit) {
+    onDispose { toneGenerator.release() }
+  }
 
   LaunchedEffect(uiState.message) {
     val text = uiState.message?.text ?: return@LaunchedEffect
     snackbarHostState.showSnackbar(text)
     viewModel.clearMessage()
+  }
+
+  LaunchedEffect(uiState.scanSoundCue?.id) {
+    when (uiState.scanSoundCue?.tone) {
+      ScanSoundTone.Success -> toneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 120)
+      ScanSoundTone.Error -> toneGenerator.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 180)
+      null -> Unit
+    }
   }
 
   WarehousePdaTheme {
@@ -666,7 +682,7 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
         value = barcodeInput,
         onValueChange = { viewModel.updateBarcodeInput(operation, it) },
         onAdd = { viewModel.addBarcodes(operation, it) },
-        onClear = { viewModel.clearBarcodes(operation) }
+        onClear = { viewModel.clearBarcodeInput(operation) }
       )
       ScanListCard(
         barcodeList = barcodeList,

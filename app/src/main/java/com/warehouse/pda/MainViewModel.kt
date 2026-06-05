@@ -114,6 +114,16 @@ data class ReviewState(
   val isValid: Boolean
 )
 
+enum class ScanSoundTone {
+  Success,
+  Error
+}
+
+data class ScanSoundCue(
+  val id: String = UUID.randomUUID().toString(),
+  val tone: ScanSoundTone
+)
+
 data class RecentActivity(
   val id: String,
   val title: String,
@@ -147,6 +157,7 @@ data class AppUiState(
   val inboundTodayCount: Int = 0,
   val outboundTodayCount: Int = 0,
   val message: StatusMessage? = null,
+  val scanSoundCue: ScanSoundCue? = null,
   val lastSubmitSummary: String? = null,
   val recentActivities: List<RecentActivity> = emptyList(),
   val appUpdateState: AppUpdateState = AppUpdateState()
@@ -392,6 +403,10 @@ class MainViewModel(
     _uiState.update { it.copy(barcodeInputs = it.barcodeInputs + (operation to value)) }
   }
 
+  fun clearBarcodeInput(operation: PdaOperation) {
+    _uiState.update { it.copy(barcodeInputs = it.barcodeInputs + (operation to "")) }
+  }
+
   fun updateForm(transform: (OperationFormState) -> OperationFormState) {
     _uiState.update { state -> state.copy(formState = transform(state.formState).normalized()) }
   }
@@ -404,7 +419,12 @@ class MainViewModel(
     val existing = _uiState.value.barcodeLists[operation].orEmpty()
     val fresh = candidates.filterNot(existing::contains)
     if (fresh.isEmpty()) {
-      _uiState.update { it.copy(message = StatusMessage(MessageTone.Info, "这些条码已在当前清单中")) }
+      _uiState.update {
+        it.copy(
+          message = StatusMessage(MessageTone.Info, "这些条码已在当前清单中"),
+          scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
+        )
+      }
       return
     }
 
@@ -433,7 +453,8 @@ class MainViewModel(
           val merged = it.barcodeReviews[operation].orEmpty() + failureReviews
           it.copy(
             barcodeReviews = it.barcodeReviews + (operation to merged),
-            message = StatusMessage(MessageTone.Error, error.message ?: "条码校验失败")
+            message = StatusMessage(MessageTone.Error, error.message ?: "条码校验失败"),
+            scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
           )
         }
       }
@@ -686,7 +707,12 @@ class MainViewModel(
     }
     _uiState.update {
       val nextReviews = it.barcodeReviews[operation].orEmpty() + mapped
-      it.copy(barcodeReviews = it.barcodeReviews + (operation to nextReviews))
+      it.copy(
+        barcodeReviews = it.barcodeReviews + (operation to nextReviews),
+        scanSoundCue = ScanSoundCue(
+          tone = if (results.all { result -> result.ok }) ScanSoundTone.Success else ScanSoundTone.Error
+        )
+      )
     }
   }
 
