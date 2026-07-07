@@ -80,6 +80,8 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -178,12 +180,47 @@ fun WarehousePdaRoot(viewModel: MainViewModel) {
       ) {
         when (val route = uiState.route) {
           AppRoute.Login -> LoginScreen(uiState, viewModel)
-          is AppRoute.Main -> MainSectionScreen(uiState, route.tab, viewModel)
-          is AppRoute.OperationConfig -> OperationConfigScreen(uiState, route.operation, viewModel)
-          is AppRoute.OperationScan -> OperationScanScreen(uiState, route.operation, viewModel)
+          is AppRoute.Main -> MasterDataRefreshContainer(
+            refreshing = uiState.loadingMasterData,
+            onRefresh = viewModel::refreshMasterData
+          ) {
+            MainSectionScreen(uiState, route.tab, viewModel)
+          }
+
+          is AppRoute.OperationConfig -> MasterDataRefreshContainer(
+            refreshing = uiState.loadingMasterData,
+            onRefresh = viewModel::refreshMasterData
+          ) {
+            OperationConfigScreen(uiState, route.operation, viewModel)
+          }
+
+          is AppRoute.OperationScan -> MasterDataRefreshContainer(
+            refreshing = uiState.loadingMasterData,
+            onRefresh = viewModel::refreshMasterData
+          ) {
+            OperationScanScreen(uiState, route.operation, viewModel)
+          }
         }
       }
     }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MasterDataRefreshContainer(
+  refreshing: Boolean,
+  onRefresh: () -> Unit,
+  content: @Composable () -> Unit
+) {
+  val refreshState = rememberPullToRefreshState()
+  PullToRefreshBox(
+    isRefreshing = refreshing,
+    onRefresh = onRefresh,
+    state = refreshState,
+    modifier = Modifier.fillMaxSize()
+  ) {
+    content()
   }
 }
 
@@ -687,6 +724,14 @@ private fun DirectOutboundOrderScreen(uiState: AppUiState, viewModel: MainViewMo
     val target = line.targetQuantity.toIntOrNull()
     target != null && line.barcodes.size != target
   }
+  val stockShortage = uiState.outboundLines.any { line ->
+    line.barcodes.size > availableQuantity(masterData, form.directSourceWarehouseId, line.goodsId)
+  }
+  val submitDetailText = if (stockShortage) {
+    "库存不足 · 异常 $invalidCount"
+  } else {
+    "已扫 $totalScanned · 异常 $invalidCount"
+  }
 
   Scaffold(
     containerColor = AppSurface,
@@ -731,7 +776,7 @@ private fun DirectOutboundOrderScreen(uiState: AppUiState, viewModel: MainViewMo
           } else {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
               Text("确认出库 $completedSku/$totalSku", color = Color.White, fontWeight = FontWeight.Black, maxLines = 1)
-              Text("已扫 $totalScanned · 异常 $invalidCount", color = Color.White.copy(alpha = 0.82f), fontSize = 11.sp)
+              Text(submitDetailText, color = Color.White.copy(alpha = 0.82f), fontSize = 11.sp)
             }
           }
         }

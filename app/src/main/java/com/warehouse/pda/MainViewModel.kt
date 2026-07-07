@@ -832,6 +832,14 @@ class MainViewModel(
     if (operation == PdaOperation.FactoryInbound && rawMessage.contains("条码")) {
       return "当前服务器仍是旧版入库接口，厂家数量入库需要先部署新版后端"
     }
+    if (
+      operation == PdaOperation.DirectOutbound &&
+      (rawMessage.contains("prisma", ignoreCase = true) ||
+        rawMessage.contains("findUnique", ignoreCase = true) ||
+        rawMessage.contains("uuid", ignoreCase = true))
+    ) {
+      return "出库参数不完整，请检查出库仓库、出库去向和库存后再提交"
+    }
     return rawMessage
   }
 
@@ -839,6 +847,20 @@ class MainViewModel(
     formState: OperationFormState,
     lines: List<OutboundLineState>
   ) {
+    val masterData = _uiState.value.masterData
+    if (masterData == null) {
+      _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "基础数据未加载完成，请稍后重试")) }
+      return
+    }
+
+    val sourceWarehouse = masterData.warehouses.firstOrNull {
+      it.id == formState.directSourceWarehouseId && it.status == "enabled"
+    }
+    if (sourceWarehouse == null) {
+      _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请选择有效的出库仓库")) }
+      return
+    }
+
     val activeLines = lines.filter { it.barcodes.isNotEmpty() || it.targetQuantity.isNotBlank() }
     if (activeLines.isEmpty()) {
       _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请先添加货品行并扫描条码")) }
@@ -875,6 +897,20 @@ class MainViewModel(
       if (targetQuantity != null && line.barcodes.size != targetQuantity) {
         _uiState.update {
           it.copy(message = StatusMessage(MessageTone.Error, "目标 ${targetQuantity} 件，当前已扫 ${line.barcodes.size} 件，未扫满不能提交"))
+        }
+        return
+      }
+
+      val availableQuantity = availableStockQuantity(masterData, sourceWarehouse.id, line.goodsId)
+      if (line.barcodes.size > availableQuantity) {
+        val goodsName = goodsDisplayName(masterData, line.goodsId)
+        _uiState.update {
+          it.copy(
+            message = StatusMessage(
+              MessageTone.Error,
+              "$goodsName 可用库存 $availableQuantity 件，当前出库 ${line.barcodes.size} 件，库存不足"
+            )
+          )
         }
         return
       }
@@ -941,7 +977,32 @@ class MainViewModel(
     }
   }
 
-  fun loadMasterData() {
+  private fun availableStockQuantity(
+    masterData: WarehouseState,
+    warehouseId: String,
+    goodsId: String
+  ): Int {
+    return masterData.warehouseStocks.orEmpty().firstOrNull {
+      it.warehouseId == warehouseId && it.goodsId == goodsId
+    }?.quantity ?: 0
+  }
+
+  private fun goodsDisplayName(masterData: WarehouseState, goodsId: String): String {
+    val goods = masterData.goods.firstOrNull { it.id == goodsId }
+    return when {
+      goods == null -> "该货品"
+      goods.code.isBlank() -> goods.name
+      else -> "${goods.name}（${goods.code}）"
+    }
+  }
+
+  fun refreshMasterData() {
+    val state = _uiState.value
+    if (state.currentUser == null || state.loadingMasterData) return
+    loadMasterData(showSuccess = true)
+  }
+
+  fun loadMasterData(showSuccess: Boolean = false) {
     val serverUrl = _uiState.value.loginForm.serverUrl
     viewModelScope.launch {
       _uiState.update { it.copy(loadingMasterData = true) }
@@ -957,7 +1018,12 @@ class MainViewModel(
             formState = ensureDefaults(
               masterData,
               state.formState.withWorkWarehouseDefaults(masterData, workWarehouseId)
-            ).normalized()
+            ).normalized(),
+            message = if (showSuccess) {
+              StatusMessage(MessageTone.Success, "数据已刷新")
+            } else {
+              state.message
+            }
           )
         }
       }.onFailure { error ->
