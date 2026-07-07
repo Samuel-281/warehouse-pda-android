@@ -9,6 +9,7 @@ import com.warehouse.pda.data.BarcodeValidationResult
 import com.warehouse.pda.data.CurrentUser
 import com.warehouse.pda.data.InboundSubmitRequest
 import com.warehouse.pda.data.InventoryDetailResult
+import com.warehouse.pda.data.OutboundLineSubmitRequest
 import com.warehouse.pda.data.OutboundSubmitRequest
 import com.warehouse.pda.data.PdaReleaseInfo
 import com.warehouse.pda.data.SalesReturnSubmitRequest
@@ -36,12 +37,12 @@ enum class PdaOperation(
   val description: String,
   val group: OperationGroup
 ) {
-  FactoryInbound("厂家到货", "厂家到货新条码入库", OperationGroup.Inbound),
+  FactoryInbound("厂家到货", "按货品数量完成厂家到货入库", OperationGroup.Inbound),
   TerminalInbound("终端退换货", "登记生产日期并扫码回仓", OperationGroup.Inbound),
   SalesReturn("销售退回", "将销售人员名下条码回流仓库", OperationGroup.Inbound),
   Transfer("挪仓", "从源仓扫码转入目标仓", OperationGroup.Outbound),
   SalesOutbound("销售出库", "扫码转入销售人员名下", OperationGroup.Outbound),
-  DirectOutbound("直接出库", "新条码登记后立即发往仓库或销售", OperationGroup.Outbound)
+  DirectOutbound("扫码出库", "多货品连续扫码", OperationGroup.Outbound)
 }
 
 enum class MainTab(val title: String) {
@@ -70,6 +71,7 @@ data class OperationFormState(
   val factoryWarehouseId: String = "",
   val factoryLocationId: String = "",
   val factoryGoodsId: String = "",
+  val factoryQuantity: String = "1",
   val terminalWarehouseId: String = "",
   val terminalLocationId: String = "",
   val terminalGoodsId: String = "",
@@ -88,6 +90,13 @@ data class OperationFormState(
   val directSalespersonId: String = "",
   val returnWarehouseId: String = "",
   val returnLocationId: String = ""
+)
+
+data class OutboundLineState(
+  val goodsId: String,
+  val targetQuantity: String = "",
+  val barcodes: List<String> = emptyList(),
+  val reviews: Map<String, ReviewState> = emptyMap()
 )
 
 data class QueryFormState(
@@ -148,10 +157,13 @@ data class AppUiState(
   val currentUser: CurrentUser? = null,
   val loginForm: LoginFormState = LoginFormState(),
   val masterData: WarehouseState? = null,
+  val selectedWorkWarehouseId: String = "",
   val formState: OperationFormState = OperationFormState(),
   val barcodeInputs: Map<PdaOperation, String> = PdaOperation.entries.associateWith { "" },
   val barcodeLists: Map<PdaOperation, List<String>> = PdaOperation.entries.associateWith { emptyList() },
   val barcodeReviews: Map<PdaOperation, Map<String, ReviewState>> = PdaOperation.entries.associateWith { emptyMap() },
+  val outboundLines: List<OutboundLineState> = emptyList(),
+  val selectedOutboundGoodsId: String = "",
   val submitting: Map<PdaOperation, Boolean> = PdaOperation.entries.associateWith { false },
   val queryForm: QueryFormState = QueryFormState(),
   val inboundTodayCount: Int = 0,
@@ -334,11 +346,14 @@ class MainViewModel(
           currentUser = null,
           loginForm = savedLoginForm().copy(serverUrl = it.loginForm.serverUrl),
           masterData = null,
+          selectedWorkWarehouseId = "",
           formState = OperationFormState(),
           queryForm = QueryFormState(),
           barcodeLists = PdaOperation.entries.associateWith { emptyList() },
           barcodeReviews = PdaOperation.entries.associateWith { emptyMap() },
           barcodeInputs = PdaOperation.entries.associateWith { "" },
+          outboundLines = emptyList(),
+          selectedOutboundGoodsId = "",
           inboundTodayCount = 0,
           outboundTodayCount = 0,
           lastSubmitSummary = null,
@@ -387,13 +402,44 @@ class MainViewModel(
   }
 
   fun startScanning(operation: PdaOperation) {
-    _uiState.update { it.copy(route = AppRoute.OperationScan(operation), message = null) }
+    if (operation == PdaOperation.FactoryInbound) {
+      _uiState.update {
+        it.copy(
+          route = AppRoute.OperationConfig(operation),
+          message = StatusMessage(MessageTone.Info, "厂家到货按数量入库，无需进入扫码页")
+        )
+      }
+      return
+    }
+
+    _uiState.update { state ->
+      if (operation == PdaOperation.DirectOutbound) {
+        state.copy(
+          route = AppRoute.OperationScan(operation),
+          message = null
+        )
+      } else {
+        state.copy(route = AppRoute.OperationScan(operation), message = null)
+      }
+    }
   }
 
   fun goBackFromOperation(operation: PdaOperation, fromScan: Boolean) {
     _uiState.update {
       it.copy(
         route = if (fromScan) AppRoute.OperationConfig(operation) else AppRoute.Main(defaultTabFor(operation)),
+        message = null
+      )
+    }
+  }
+
+  fun cancelDirectOutbound() {
+    _uiState.update {
+      it.copy(
+        route = AppRoute.Main(MainTab.Outbound),
+        outboundLines = emptyList(),
+        selectedOutboundGoodsId = "",
+        barcodeInputs = it.barcodeInputs + (PdaOperation.DirectOutbound to ""),
         message = null
       )
     }
@@ -411,7 +457,27 @@ class MainViewModel(
     _uiState.update { state -> state.copy(formState = transform(state.formState).normalized()) }
   }
 
+  fun selectWorkWarehouse(warehouseId: String) {
+    _uiState.update { state ->
+      val masterData = state.masterData ?: return@update state
+      val selectedWarehouseId = existingWorkWarehouseId(masterData, warehouseId)
+      if (selectedWarehouseId.isBlank()) {
+        return@update state
+      }
+      state.copy(
+        selectedWorkWarehouseId = selectedWarehouseId,
+        formState = state.formState.withWorkWarehouseDefaults(masterData, selectedWarehouseId).normalized(),
+        message = null
+      )
+    }
+  }
+
   fun addBarcodes(operation: PdaOperation, rawInput: String? = null) {
+    if (operation == PdaOperation.DirectOutbound) {
+      addOutboundBarcodes(rawInput)
+      return
+    }
+
     val input = rawInput ?: _uiState.value.barcodeInputs[operation].orEmpty()
     val candidates = parseBarcodes(input)
     if (candidates.isEmpty()) return
@@ -461,7 +527,133 @@ class MainViewModel(
     }
   }
 
+  fun selectOutboundLine(goodsId: String) {
+    _uiState.update { it.copy(selectedOutboundGoodsId = goodsId, message = null) }
+  }
+
+  fun addOrSelectOutboundLine(goodsId: String? = null) {
+    val resolvedGoodsId = goodsId ?: _uiState.value.formState.directGoodsId
+    if (resolvedGoodsId.isBlank()) {
+      _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请先选择货物")) }
+      return
+    }
+
+    _uiState.update { state ->
+      val exists = state.outboundLines.any { it.goodsId == resolvedGoodsId }
+      state.copy(
+        outboundLines = if (exists) state.outboundLines else state.outboundLines + OutboundLineState(goodsId = resolvedGoodsId),
+        selectedOutboundGoodsId = resolvedGoodsId,
+        message = if (exists) StatusMessage(MessageTone.Error, "该货品已添加，请直接进入扫码") else null
+      )
+    }
+  }
+
+  fun updateOutboundLineTarget(goodsId: String, targetQuantity: String) {
+    val cleaned = targetQuantity.filter(Char::isDigit).trimStart('0')
+    _uiState.update { state ->
+      state.copy(
+        outboundLines = state.outboundLines.map { line ->
+          if (line.goodsId == goodsId) line.copy(targetQuantity = cleaned) else line
+        }
+      )
+    }
+  }
+
+  fun removeOutboundLine(goodsId: String) {
+    _uiState.update { state ->
+      val nextLines = state.outboundLines.filterNot { it.goodsId == goodsId }
+      val nextSelected = if (state.selectedOutboundGoodsId == goodsId) {
+        nextLines.firstOrNull()?.goodsId.orEmpty()
+      } else {
+        state.selectedOutboundGoodsId
+      }
+      state.copy(outboundLines = nextLines, selectedOutboundGoodsId = nextSelected)
+    }
+  }
+
+  private fun addOutboundBarcodes(rawInput: String? = null) {
+    val state = _uiState.value
+    val input = rawInput ?: state.barcodeInputs[PdaOperation.DirectOutbound].orEmpty()
+    val candidates = parseBarcodes(input)
+    if (candidates.isEmpty()) return
+
+    val selectedGoodsId = state.selectedOutboundGoodsId.ifBlank { state.formState.directGoodsId }
+    if (selectedGoodsId.isBlank()) {
+      _uiState.update {
+        it.copy(
+          message = StatusMessage(MessageTone.Error, "请先选择当前货品行"),
+          scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
+        )
+      }
+      return
+    }
+
+    val allExisting = state.outboundLines.flatMap { it.barcodes }.toSet()
+    val fresh = candidates.filterNot(allExisting::contains)
+    if (fresh.isEmpty()) {
+      _uiState.update {
+        it.copy(
+          barcodeInputs = it.barcodeInputs + (PdaOperation.DirectOutbound to ""),
+          message = StatusMessage(MessageTone.Info, "这些条码已在当前作业单中"),
+          scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
+        )
+      }
+      return
+    }
+
+    _uiState.update { current ->
+      val ensuredLines = if (current.outboundLines.any { it.goodsId == selectedGoodsId }) {
+        current.outboundLines
+      } else {
+        current.outboundLines + OutboundLineState(goodsId = selectedGoodsId)
+      }
+      current.copy(
+        outboundLines = ensuredLines.map { line ->
+          if (line.goodsId == selectedGoodsId) line.copy(barcodes = line.barcodes + fresh) else line
+        },
+        selectedOutboundGoodsId = selectedGoodsId,
+        barcodeInputs = current.barcodeInputs + (PdaOperation.DirectOutbound to "")
+      )
+    }
+
+    val validationRequest = BarcodeValidationRequest(
+      mode = "warehouse_outbound",
+      barcodes = fresh,
+      goodsId = selectedGoodsId,
+      warehouseId = _uiState.value.formState.directSourceWarehouseId
+    )
+    viewModelScope.launch {
+      runCatching {
+        repository.validateBarcodes(_uiState.value.loginForm.serverUrl, validationRequest)
+      }.onSuccess { results ->
+        mergeOutboundValidationResults(selectedGoodsId, results)
+      }.onFailure { error ->
+        val failureReviews = fresh.associateWith {
+          ReviewState(
+            label = "校验失败",
+            detail = error.message ?: "条码校验失败",
+            isValid = false
+          )
+        }
+        _uiState.update { current ->
+          current.copy(
+            outboundLines = current.outboundLines.map { line ->
+              if (line.goodsId == selectedGoodsId) line.copy(reviews = line.reviews + failureReviews) else line
+            },
+            message = StatusMessage(MessageTone.Error, error.message ?: "条码校验失败"),
+            scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
+          )
+        }
+      }
+    }
+  }
+
   fun removeBarcode(operation: PdaOperation, barcode: String) {
+    if (operation == PdaOperation.DirectOutbound) {
+      removeOutboundBarcode(barcode)
+      return
+    }
+
     _uiState.update {
       val nextList = it.barcodeLists[operation].orEmpty().filterNot { item -> item == barcode }
       val nextReviews = it.barcodeReviews[operation].orEmpty().toMutableMap().also { map -> map.remove(barcode) }
@@ -473,11 +665,40 @@ class MainViewModel(
   }
 
   fun clearBarcodes(operation: PdaOperation) {
+    if (operation == PdaOperation.DirectOutbound) {
+      _uiState.update {
+        it.copy(
+          outboundLines = it.outboundLines.map { line ->
+            if (line.goodsId == it.selectedOutboundGoodsId) line.copy(barcodes = emptyList(), reviews = emptyMap()) else line
+          },
+          barcodeInputs = it.barcodeInputs + (operation to "")
+        )
+      }
+      return
+    }
+
     _uiState.update {
       it.copy(
         barcodeLists = it.barcodeLists + (operation to emptyList()),
         barcodeReviews = it.barcodeReviews + (operation to emptyMap()),
         barcodeInputs = it.barcodeInputs + (operation to "")
+      )
+    }
+  }
+
+  fun removeOutboundBarcode(barcode: String) {
+    _uiState.update { state ->
+      state.copy(
+        outboundLines = state.outboundLines.map { line ->
+          if (barcode in line.barcodes) {
+            line.copy(
+              barcodes = line.barcodes.filterNot { it == barcode },
+              reviews = line.reviews.toMutableMap().also { it.remove(barcode) }
+            )
+          } else {
+            line
+          }
+        }
       )
     }
   }
@@ -525,10 +746,16 @@ class MainViewModel(
 
       val latestState = _uiState.value
       val normalizedForm = latestState.formState.normalized()
+
+      if (operation == PdaOperation.DirectOutbound) {
+        submitOutboundWorkOrder(normalizedForm, latestState.outboundLines)
+        return@launch
+      }
+
       val barcodes = latestState.barcodeLists[operation].orEmpty()
       val reviews = latestState.barcodeReviews[operation].orEmpty()
 
-      if (barcodes.isEmpty()) {
+      if (operation != PdaOperation.FactoryInbound && barcodes.isEmpty()) {
         _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请先扫描条码")) }
         return@launch
       }
@@ -538,6 +765,10 @@ class MainViewModel(
       }
       if (operation == PdaOperation.TerminalInbound && normalizedForm.terminalProductionDate.isBlank()) {
         _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "终端店铺退换货入库必须登记生产日期")) }
+        return@launch
+      }
+      if (operation == PdaOperation.FactoryInbound && normalizePositiveInt(normalizedForm.factoryQuantity) == null) {
+        _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "厂家到货入库数量必须为正整数")) }
         return@launch
       }
       if (normalizedForm != latestState.formState) {
@@ -560,7 +791,7 @@ class MainViewModel(
       runCatching {
         submitByOperation(operation, normalizedForm, barcodes)
       }.onSuccess { result ->
-        val itemCount = result.items.size
+        val itemCount = result.quantity ?: result.items.size
         _uiState.update { state ->
           state.copy(
             route = AppRoute.Main(MainTab.Home),
@@ -589,9 +820,123 @@ class MainViewModel(
         _uiState.update {
           it.copy(
             submitting = it.submitting + (operation to false),
-            message = StatusMessage(MessageTone.Error, error.message ?: "提交失败")
+            message = StatusMessage(MessageTone.Error, submitErrorMessage(operation, error))
           )
         }
+      }
+    }
+  }
+
+  private fun submitErrorMessage(operation: PdaOperation, error: Throwable): String {
+    val rawMessage = error.message ?: return "提交失败"
+    if (operation == PdaOperation.FactoryInbound && rawMessage.contains("条码")) {
+      return "当前服务器仍是旧版入库接口，厂家数量入库需要先部署新版后端"
+    }
+    return rawMessage
+  }
+
+  private suspend fun submitOutboundWorkOrder(
+    formState: OperationFormState,
+    lines: List<OutboundLineState>
+  ) {
+    val activeLines = lines.filter { it.barcodes.isNotEmpty() || it.targetQuantity.isNotBlank() }
+    if (activeLines.isEmpty()) {
+      _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请先添加货品行并扫描条码")) }
+      return
+    }
+    if (formState.directDestinationType == "warehouse") {
+      if (formState.directTargetWarehouseId.isBlank()) {
+        _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请选择目标仓库")) }
+        return
+      }
+      if (formState.directTargetWarehouseId == formState.directSourceWarehouseId) {
+        _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "目标仓库不能与出库仓库相同")) }
+        return
+      }
+    } else if (formState.directSalespersonId.isBlank()) {
+      _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请选择销售人员")) }
+      return
+    }
+
+    for (line in activeLines) {
+      val targetQuantity = line.targetQuantity.toIntOrNull()
+      if (line.barcodes.isEmpty()) {
+        _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "存在未扫码的货品行，不能提交")) }
+        return
+      }
+      if (line.barcodes.any { line.reviews[it]?.isValid == false }) {
+        _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "存在异常条码，不能提交")) }
+        return
+      }
+      if (line.targetQuantity.isNotBlank() && targetQuantity == null) {
+        _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "目标数量必须为正整数")) }
+        return
+      }
+      if (targetQuantity != null && line.barcodes.size != targetQuantity) {
+        _uiState.update {
+          it.copy(message = StatusMessage(MessageTone.Error, "目标 ${targetQuantity} 件，当前已扫 ${line.barcodes.size} 件，未扫满不能提交"))
+        }
+        return
+      }
+    }
+
+    _uiState.update {
+      it.copy(
+        submitting = it.submitting + (PdaOperation.DirectOutbound to true),
+        message = null
+      )
+    }
+
+    val serverUrl = _uiState.value.loginForm.serverUrl
+    runCatching {
+      repository.submitOutbound(
+        serverUrl,
+        OutboundSubmitRequest(
+          type = "direct",
+          sourceWarehouseId = formState.directSourceWarehouseId,
+          targetWarehouseId = if (formState.directDestinationType == "warehouse") formState.directTargetWarehouseId else null,
+          targetLocationId = if (formState.directDestinationType == "warehouse") formState.directTargetLocationId else null,
+          salespersonId = if (formState.directDestinationType == "sales") formState.directSalespersonId else null,
+          lines = activeLines.map { line ->
+            OutboundLineSubmitRequest(
+              goodsId = line.goodsId,
+              targetQuantity = line.targetQuantity.toIntOrNull(),
+              barcodes = line.barcodes
+            )
+          }
+        )
+      )
+    }.onSuccess { result ->
+      val itemCount = result.quantity ?: result.items.size
+      _uiState.update { state ->
+        state.copy(
+          route = AppRoute.Main(MainTab.Home),
+          submitting = state.submitting + (PdaOperation.DirectOutbound to false),
+          outboundLines = emptyList(),
+          selectedOutboundGoodsId = "",
+          barcodeInputs = state.barcodeInputs + (PdaOperation.DirectOutbound to ""),
+          outboundTodayCount = state.outboundTodayCount + itemCount,
+          lastSubmitSummary = "${PdaOperation.DirectOutbound.title}：单号 ${result.orderId}，共 $itemCount 件",
+          recentActivities = pushRecentActivity(
+            state.recentActivities,
+            RecentActivity(
+              id = UUID.randomUUID().toString(),
+              title = PdaOperation.DirectOutbound.title,
+              subtitle = "单号 ${result.orderId}，共 $itemCount 件",
+              timeLabel = nowLabel(),
+              tone = MessageTone.Success
+            )
+          ),
+          message = StatusMessage(MessageTone.Success, "${PdaOperation.DirectOutbound.title}提交成功，单号 ${result.orderId}")
+        )
+      }
+      loadMasterData()
+    }.onFailure { error ->
+      _uiState.update {
+        it.copy(
+          submitting = it.submitting + (PdaOperation.DirectOutbound to false),
+          message = StatusMessage(MessageTone.Error, error.message ?: "提交失败")
+        )
       }
     }
   }
@@ -603,11 +948,16 @@ class MainViewModel(
       runCatching {
         repository.getMasterData(serverUrl)
       }.onSuccess { masterData ->
-        _uiState.update {
-          it.copy(
+        _uiState.update { state ->
+          val workWarehouseId = existingWorkWarehouseId(masterData, state.selectedWorkWarehouseId)
+          state.copy(
             masterData = masterData,
             loadingMasterData = false,
-            formState = ensureDefaults(masterData, it.formState).normalized()
+            selectedWorkWarehouseId = workWarehouseId,
+            formState = ensureDefaults(
+              masterData,
+              state.formState.withWorkWarehouseDefaults(masterData, workWarehouseId)
+            ).normalized()
           )
         }
       }.onFailure { error ->
@@ -635,7 +985,8 @@ class MainViewModel(
           warehouseId = formState.factoryWarehouseId,
           locationId = formState.factoryLocationId,
           goodsId = formState.factoryGoodsId,
-          barcodes = barcodes
+          quantity = normalizePositiveInt(formState.factoryQuantity),
+          barcodes = emptyList()
         )
       )
 
@@ -716,6 +1067,26 @@ class MainViewModel(
     }
   }
 
+  private fun mergeOutboundValidationResults(goodsId: String, results: List<BarcodeValidationResult>) {
+    val mapped = results.associate {
+      it.barcode to ReviewState(
+        label = it.label,
+        detail = it.detail,
+        isValid = it.ok
+      )
+    }
+    _uiState.update { state ->
+      state.copy(
+        outboundLines = state.outboundLines.map { line ->
+          if (line.goodsId == goodsId) line.copy(reviews = line.reviews + mapped) else line
+        },
+        scanSoundCue = ScanSoundCue(
+          tone = if (results.all { result -> result.ok }) ScanSoundTone.Success else ScanSoundTone.Error
+        )
+      )
+    }
+  }
+
   private fun buildValidationRequest(
     operation: PdaOperation,
     formState: OperationFormState,
@@ -746,9 +1117,10 @@ class MainViewModel(
       )
 
       PdaOperation.DirectOutbound -> BarcodeValidationRequest(
-        mode = "factory_inbound",
+        mode = "warehouse_outbound",
         barcodes = barcodes,
-        goodsId = formState.directGoodsId
+        goodsId = formState.directGoodsId,
+        warehouseId = formState.directSourceWarehouseId
       )
 
       PdaOperation.SalesReturn -> BarcodeValidationRequest(
@@ -797,12 +1169,60 @@ class MainViewModel(
       return "${result.item.barcode}，当前在$ownerLabel"
     }
 
+    private fun normalizePositiveInt(value: String): Int? {
+      return value.trim().toIntOrNull()?.takeIf { it > 0 }
+    }
+
+    private fun existingWorkWarehouseId(masterData: WarehouseState, currentId: String): String {
+      val warehouses = masterData.warehouses.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+      return warehouses.firstOrNull { it.id == currentId }?.id ?: warehouses.firstOrNull()?.id.orEmpty()
+    }
+
+    private fun OperationFormState.withWorkWarehouseDefaults(
+      masterData: WarehouseState,
+      warehouseId: String
+    ): OperationFormState {
+      if (warehouseId.isBlank()) return this
+
+      val warehouses = masterData.warehouses.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+      val locations = masterData.locations.filter { it.status == "enabled" }
+
+      fun firstLocation(targetWarehouseId: String): String {
+        return locations.firstOrNull { it.warehouseId == targetWarehouseId }?.id.orEmpty()
+      }
+
+      val transferTargetWarehouseId = warehouses
+        .firstOrNull { it.id == this.transferTargetWarehouseId && it.id != warehouseId }
+        ?.id
+        ?: warehouses.firstOrNull { it.id != warehouseId }?.id.orEmpty()
+      val directTargetWarehouseId = warehouses
+        .firstOrNull { it.id == this.directTargetWarehouseId && it.id != warehouseId }
+        ?.id
+        ?: warehouses.firstOrNull { it.id != warehouseId }?.id.orEmpty()
+
+      return copy(
+        factoryWarehouseId = warehouseId,
+        factoryLocationId = firstLocation(warehouseId),
+        terminalWarehouseId = warehouseId,
+        terminalLocationId = firstLocation(warehouseId),
+        transferSourceWarehouseId = warehouseId,
+        transferTargetWarehouseId = transferTargetWarehouseId,
+        transferTargetLocationId = firstLocation(transferTargetWarehouseId),
+        salesWarehouseId = warehouseId,
+        directSourceWarehouseId = warehouseId,
+        directTargetWarehouseId = directTargetWarehouseId,
+        directTargetLocationId = firstLocation(directTargetWarehouseId),
+        returnWarehouseId = warehouseId,
+        returnLocationId = firstLocation(warehouseId)
+      )
+    }
+
     private fun ensureDefaults(
       masterData: WarehouseState,
       current: OperationFormState
     ): OperationFormState {
-      val warehouses = masterData.warehouses.filter { it.status == "enabled" }
-      val goods = masterData.goods.filter { it.status == "enabled" }
+      val warehouses = masterData.warehouses.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+      val goods = masterData.goods.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
       val terminalStores = masterData.terminalStores.filter { it.status == "enabled" }
       val salespeople = masterData.salespeople.filter { it.status == "enabled" }
       val locations = masterData.locations.filter { it.status == "enabled" }
@@ -860,6 +1280,7 @@ class MainViewModel(
 
 private fun OperationFormState.normalized(): OperationFormState {
   return copy(
+    factoryQuantity = factoryQuantity.trim(),
     terminalProductionDate = terminalProductionDate.trim()
   )
 }

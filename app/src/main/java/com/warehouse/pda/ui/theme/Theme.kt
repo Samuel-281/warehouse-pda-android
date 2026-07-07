@@ -11,7 +11,15 @@ private val LightColors = lightColorScheme(
   primaryContainer = PdaPrimaryContainer,
   onPrimaryContainer = PdaOnPrimaryContainer,
   background = PdaBackground,
-  surface = PdaSurface
+  onBackground = PdaOnSurface,
+  surface = PdaSurface,
+  onSurface = PdaOnSurface,
+  surfaceVariant = PdaSurfaceVariant,
+  onSurfaceVariant = PdaOnSurfaceVariant,
+  outline = PdaOutline,
+  outlineVariant = PdaOutlineVariant,
+  error = PdaError,
+  errorContainer = PdaErrorContainer
 )
 
 private val DarkColors = darkColorScheme(

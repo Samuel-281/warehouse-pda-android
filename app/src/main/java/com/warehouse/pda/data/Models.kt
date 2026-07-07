@@ -24,6 +24,7 @@ data class Goods(
   val category: String,
   val unit: String,
   val spec: String,
+  val sortOrder: Int = 0,
   val status: String
 )
 
@@ -34,6 +35,7 @@ data class WarehouseRecord(
   val type: String,
   val parentId: String?,
   val manager: String,
+  val sortOrder: Int = 0,
   val status: String
 )
 
@@ -64,12 +66,21 @@ data class TerminalStore(
   val status: String
 )
 
+data class WarehouseStock(
+  val id: String,
+  val warehouseId: String,
+  val goodsId: String,
+  val quantity: Int,
+  val lastChangedAt: String
+)
+
 data class WarehouseState(
   val goods: List<Goods>,
   val warehouses: List<WarehouseRecord>,
   val locations: List<StorageLocation>,
   val salespeople: List<Salesperson>,
-  val terminalStores: List<TerminalStore>
+  val terminalStores: List<TerminalStore>,
+  val warehouseStocks: List<WarehouseStock>? = emptyList()
 )
 
 data class InventoryItem(
@@ -136,6 +147,13 @@ data class InboundSubmitRequest(
   val goodsId: String,
   val terminalStoreId: String? = null,
   val productionDate: String? = null,
+  val quantity: Int? = null,
+  val barcodes: List<String> = emptyList()
+)
+
+data class OutboundLineSubmitRequest(
+  val goodsId: String,
+  val targetQuantity: Int? = null,
   val barcodes: List<String>
 )
 
@@ -146,7 +164,8 @@ data class OutboundSubmitRequest(
   val targetLocationId: String? = null,
   val salespersonId: String? = null,
   val goodsId: String? = null,
-  val barcodes: List<String>
+  val barcodes: List<String> = emptyList(),
+  val lines: List<OutboundLineSubmitRequest>? = null
 )
 
 data class SalesReturnSubmitRequest(
@@ -158,6 +177,7 @@ data class SalesReturnSubmitRequest(
 data class SubmitResult(
   val orderId: String,
   val inboundOrderId: String? = null,
+  val quantity: Int? = null,
   val items: List<InventoryItem>
 )
 

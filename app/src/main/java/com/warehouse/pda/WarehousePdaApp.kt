@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,10 +41,12 @@ import androidx.compose.material.icons.outlined.CallReceived
 import androidx.compose.material.icons.outlined.CallSplit
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExitToApp
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Login
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Logout
@@ -66,15 +71,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -83,6 +89,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -91,28 +100,39 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.warehouse.pda.data.InventoryDetailResult
 import com.warehouse.pda.data.StorageLocation
+import com.warehouse.pda.data.WarehouseRecord
 import com.warehouse.pda.data.WarehouseState
+import com.warehouse.pda.ui.theme.PdaBackground
+import com.warehouse.pda.ui.theme.PdaOnSurface
+import com.warehouse.pda.ui.theme.PdaOnSurfaceVariant
+import com.warehouse.pda.ui.theme.PdaOutlineVariant
+import com.warehouse.pda.ui.theme.PdaPrimaryStrong
+import com.warehouse.pda.ui.theme.PdaSurface
+import com.warehouse.pda.ui.theme.PdaSurfaceVariant
 import com.warehouse.pda.ui.theme.WarehousePdaTheme
 import java.time.LocalDate
 
-private val BluePrimary = Color(0xFF3651E3)
+private val BluePrimary = Color(0xFF0052CC)
 private val BlueSoft = Color(0xFFE8EDFF)
-private val OrangeAccent = Color(0xFFCC6B11)
+private val OrangeAccent = Color(0xFFFF7A1A)
 private val MintAccent = Color(0xFF20B46A)
-private val BlackPanel = Color(0xFF080808)
-private val AppSurface = Color(0xFFF7F7FB)
-private val CardBorder = Color(0xFFE7E8F1)
-private val MutedText = Color(0xFF7B8094)
-private val DangerRed = Color(0xFFE64A4A)
+private val AppSurface = Color(0xFFFAF8FF)
+private val CardBorder = Color(0xFFC3C6D6)
+private val MutedText = Color(0xFF434654)
+private val DangerRed = Color(0xFFBA1A1A)
 private val SuccessGreen = Color(0xFF16B37E)
 
 @Composable
@@ -352,16 +372,16 @@ private fun MainSectionScreen(uiState: AppUiState, tab: MainTab, viewModel: Main
     MainTab.Home -> DashboardScreen(uiState, viewModel)
     MainTab.Query -> QueryScreen(uiState, viewModel)
     MainTab.Inbound -> OperationHubScreen(
-      title = "入库中心",
-      subtitle = "选择业务并完成配置后开始扫码",
+      title = "入库作业",
+      subtitle = "选择本次要执行的入库任务",
       operations = PdaOperation.entries.filter { it.group == OperationGroup.Inbound },
       accentColor = BluePrimary,
       viewModel = viewModel
     )
     MainTab.Outbound -> OperationHubScreen(
-      title = "出库中心",
-      subtitle = "选择出库业务并进入扫码作业",
-      operations = PdaOperation.entries.filter { it.group == OperationGroup.Outbound },
+      title = "出库作业",
+      subtitle = "创建出库单并进入扫码作业",
+      operations = listOf(PdaOperation.DirectOutbound),
       accentColor = OrangeAccent,
       viewModel = viewModel
     )
@@ -372,103 +392,83 @@ private fun MainSectionScreen(uiState: AppUiState, tab: MainTab, viewModel: Main
 @Composable
 private fun DashboardScreen(uiState: AppUiState, viewModel: MainViewModel) {
   val currentUser = uiState.currentUser ?: return
+  val warehouses = uiState.masterData
+    ?.warehouses
+    ?.filter { it.status == "enabled" }
+    ?.sortedBy { it.sortOrder }
+    .orEmpty()
+  val selectedWarehouseId = uiState.selectedWorkWarehouseId.ifBlank { warehouses.firstOrNull()?.id.orEmpty() }
+  val warehouseLabel = warehouses
+    .firstOrNull { it.id == selectedWarehouseId }
+    ?.name
+    ?: "选择仓库"
   Column(
     modifier = Modifier
       .fillMaxSize()
-      .background(BlackPanel)
+      .background(PdaBackground)
       .statusBarsPadding()
       .padding(horizontal = 20.dp)
   ) {
-    Text(
-      "WMS 终端",
-      color = Color.White,
-      style = MaterialTheme.typography.headlineMedium,
-      fontWeight = FontWeight.Black,
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(vertical = 18.dp),
-      textAlign = TextAlign.Center
-    )
+    PdaTopBrandBar()
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
-      verticalArrangement = Arrangement.spacedBy(18.dp)
+      verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
       item {
-        AccountHeroCard(currentUser.displayName)
+        HomeGreetingHeader(
+          displayName = currentUser.displayName,
+          warehouseLabel = warehouseLabel,
+          warehouses = warehouses,
+          selectedWarehouseId = selectedWarehouseId,
+          onWarehouseSelect = viewModel::selectWorkWarehouse
+        )
       }
       item {
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-          MetricCard("今日入库", uiState.inboundTodayCount.toString(), BluePrimary, Modifier.weight(1f))
-          MetricCard("今日出库", uiState.outboundTodayCount.toString(), OrangeAccent, Modifier.weight(1f))
-        }
-      }
-      item {
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-          BigActionCard(
-            title = "入库",
-            icon = Icons.Outlined.Login,
-            background = BluePrimary,
-            contentColor = Color.White,
-            modifier = Modifier.weight(1f)
-          ) { viewModel.openTab(MainTab.Inbound) }
-          BigActionCard(
-            title = "出库",
-            icon = Icons.Outlined.Logout,
-            background = Color.White,
-            contentColor = OrangeAccent,
-            modifier = Modifier.weight(1f)
-          ) { viewModel.openTab(MainTab.Outbound) }
-        }
-      }
-      item {
-        WideActionCard(
+        PdaHomeTaskCard(
           title = "扫码查询",
-          icon = Icons.Outlined.QrCodeScanner
-        ) { viewModel.openTab(MainTab.Query) }
+          subtitle = "扫描条码快速定位库存归属",
+          icon = Icons.Outlined.QrCodeScanner,
+          accentColor = BluePrimary,
+          tintColor = Color(0xFFF0F4FF),
+          onClick = { viewModel.openTab(MainTab.Query) }
+        )
+      }
+      item {
+        PdaHomeTaskCard(
+          title = "入库作业",
+          subtitle = "执行采购收货、退货入库",
+          icon = Icons.Outlined.Login,
+          accentColor = BluePrimary,
+          tintColor = Color(0xFFF0F4FF),
+          onClick = { viewModel.openTab(MainTab.Inbound) }
+        )
+      }
+      item {
+        PdaHomeTaskCard(
+          title = "出库作业",
+          subtitle = "订单拣货、打包发货与调拨",
+          icon = Icons.Outlined.Logout,
+          accentColor = OrangeAccent,
+          tintColor = Color(0xFFFFF7F1),
+          onClick = { viewModel.openTab(MainTab.Outbound) }
+        )
       }
       uiState.lastSubmitSummary?.let { summary ->
         item {
           StatusBanner(summary, MessageTone.Success)
         }
       }
-      if (uiState.recentActivities.isNotEmpty()) {
-        item {
-          Text("最近操作", color = Color(0xFF1D2235), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-        }
-        item {
-          Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-            Column {
-              uiState.recentActivities.forEachIndexed { index, activity ->
-                RecentActivityRow(activity)
-                if (index != uiState.recentActivities.lastIndex) {
-                  Box(
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .height(1.dp)
-                      .background(CardBorder)
-                  )
-                }
-              }
-            }
-          }
-        }
-      }
-      item { Spacer(modifier = Modifier.height(16.dp)) }
+      item { Spacer(modifier = Modifier.height(24.dp)) }
     }
   }
 }
 
 @Composable
 private fun QueryScreen(uiState: AppUiState, viewModel: MainViewModel) {
+  val masterData = uiState.masterData
   val result = uiState.queryForm.result
-  QueryPageShell(title = "扫码查询", subtitle = "扫描或输入条码，查看当前库存归属与流转记录") {
-    ScanHero(
-      countLabel = if (uiState.queryForm.resultBarcode.isNotBlank()) "最近查询" else null,
-      countValue = uiState.queryForm.resultBarcode.ifBlank { null },
-      title = "准备查询",
-      subtitle = "将条码对准扫码枪或在此处输入"
-    )
-    QueryInputRow(
+  QueryPageShell(title = "扫码查询", subtitle = "扫描条码确认库存归属") {
+    QueryCommandCard(
       value = uiState.queryForm.barcodeInput,
       onValueChange = viewModel::updateQueryInput,
       loading = uiState.queryForm.loading,
@@ -477,10 +477,10 @@ private fun QueryScreen(uiState: AppUiState, viewModel: MainViewModel) {
     )
     if (uiState.queryForm.loading) {
       CenterLoadingCard("正在读取条码详情")
-    } else if (result != null) {
-      InventoryResultCard(result)
+    } else if (result != null && masterData != null) {
+      InventoryResultCard(result, masterData)
     } else {
-      EmptyStateCard("尚未查询", "扫码后会展示库存归属、生产日期和最近流转记录。")
+      QueryEmptyStateCard()
     }
   }
 }
@@ -495,9 +495,14 @@ private fun OperationHubScreen(
 ) {
   QueryPageShell(title = title, subtitle = subtitle) {
     operations.forEach { operation ->
-      HubOperationCard(operation = operation, accentColor = accentColor) {
-        viewModel.openOperation(operation)
-      }
+      PdaHomeTaskCard(
+        title = operation.title,
+        subtitle = operation.description,
+        icon = operationIcon(operation),
+        accentColor = accentColor,
+        tintColor = if (accentColor == OrangeAccent) Color(0xFFFFF4EC) else Color(0xFFF0F4FF),
+        onClick = { viewModel.openOperation(operation) }
+      )
     }
   }
 }
@@ -508,8 +513,12 @@ private fun ProfileScreen(uiState: AppUiState, viewModel: MainViewModel) {
   val context = LocalContext.current
   val updateState = uiState.appUpdateState
   val release = updateState.release
-  QueryPageShell(title = "我的", subtitle = "当前账号、角色与终端说明") {
-    Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+  QueryPageShell(title = "我的", subtitle = "账号与版本") {
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(24.dp),
+      colors = CardDefaults.cardColors(containerColor = Color.White)
+    ) {
       Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
           Box(
@@ -526,10 +535,14 @@ private fun ProfileScreen(uiState: AppUiState, viewModel: MainViewModel) {
           }
         }
         StatusChip("终端在线", Color(0xFFE8FBF3), MintAccent)
-        Text("该终端用于扫码作业、扫码查询和最近作业回看，不承担高风险系统维护。", color = MutedText)
+        Text("用于扫码作业与扫码查询。", color = MutedText)
       }
     }
-    Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Card(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(24.dp),
+      colors = CardDefaults.cardColors(containerColor = Color.White)
+    ) {
       Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("版本更新", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
         Text("当前版本 ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", color = MutedText)
@@ -573,7 +586,7 @@ private fun ProfileScreen(uiState: AppUiState, viewModel: MainViewModel) {
     }
     Button(
       onClick = viewModel::logout,
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().height(58.dp),
       colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
       shape = RoundedCornerShape(16.dp)
     ) {
@@ -595,42 +608,203 @@ private fun openExternalUrl(context: Context, url: String) {
 private fun OperationConfigScreen(uiState: AppUiState, operation: PdaOperation, viewModel: MainViewModel) {
   val masterData = uiState.masterData ?: return
   val form = uiState.formState
+  if (operation == PdaOperation.DirectOutbound) {
+    DirectOutboundOrderScreen(uiState = uiState, viewModel = viewModel)
+    return
+  }
+
   OperationPageShell(
     title = "仓库管理系统",
     onBack = { viewModel.goBackFromOperation(operation, fromScan = false) },
     trailing = {}
   ) {
     Text(operation.title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
-    Text("请选择作业参数并确认目标仓库，准备扫码。", color = MutedText)
-    ConfigSectionCard("当前作业") {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(operation.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
-        Text(operation.description, color = MutedText)
-      }
+    if (operation != PdaOperation.DirectOutbound) {
+      Text(
+        when (operation) {
+          PdaOperation.FactoryInbound -> "请选择作业参数并填写入库数量。"
+          else -> "请选择作业参数并确认目标仓库，准备扫码。"
+        },
+        color = MutedText
+      )
     }
     OperationFields(
       operation = operation,
       form = form,
       masterData = masterData,
+      operatorName = uiState.currentUser?.displayName.orEmpty(),
       onUpdate = viewModel::updateForm
     )
     Button(
-      onClick = { viewModel.startScanning(operation) },
+      onClick = { if (operation == PdaOperation.FactoryInbound) viewModel.submit(operation) else viewModel.startScanning(operation) },
+      enabled = uiState.submitting[operation] != true,
       modifier = Modifier
         .fillMaxWidth()
         .padding(top = 8.dp),
       colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
       shape = RoundedCornerShape(16.dp)
     ) {
-      Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, tint = Color.White)
+      if (uiState.submitting[operation] == true) {
+        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+      } else {
+        Icon(
+        when (operation) {
+          PdaOperation.FactoryInbound -> Icons.Outlined.CheckCircle
+          PdaOperation.DirectOutbound -> Icons.Outlined.Inventory2
+          else -> Icons.Outlined.QrCodeScanner
+        },
+        contentDescription = null,
+        tint = Color.White
+      )
       Spacer(modifier = Modifier.size(8.dp))
-      Text("开始扫码", color = Color.White, fontWeight = FontWeight.Black)
+      Text(
+        when (operation) {
+          PdaOperation.FactoryInbound -> "确认入库"
+          PdaOperation.DirectOutbound -> "填写货品明细"
+          else -> "开始扫码"
+        },
+        color = Color.White,
+        fontWeight = FontWeight.Black
+      )
+      }
+    }
+  }
+}
+
+@Composable
+private fun DirectOutboundOrderScreen(uiState: AppUiState, viewModel: MainViewModel) {
+  val masterData = uiState.masterData ?: return
+  val form = uiState.formState
+  val goods = masterData.goods.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+  val warehouses = masterData.warehouses.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+  val salespeople = masterData.salespeople.filter { it.status == "enabled" }
+  val locations = masterData.locations.filter { it.status == "enabled" }
+  val totalScanned = uiState.outboundLines.sumOf { it.barcodes.size }
+  val invalidCount = uiState.outboundLines.sumOf { line -> line.barcodes.count { line.reviews[it]?.isValid == false } }
+  val totalSku = uiState.outboundLines.size
+  val completedSku = uiState.outboundLines.count { outboundLineComplete(it) }
+  val targetMismatch = uiState.outboundLines.any { line ->
+    val target = line.targetQuantity.toIntOrNull()
+    target != null && line.barcodes.size != target
+  }
+
+  Scaffold(
+    containerColor = AppSurface,
+    contentWindowInsets = WindowInsets(0),
+    bottomBar = {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+        .navigationBarsPadding()
+        .background(Color.White)
+        .padding(horizontal = 16.dp, vertical = 14.dp)
+        .height(56.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+      ) {
+        OutlinedButton(
+          onClick = viewModel::cancelDirectOutbound,
+          enabled = uiState.submitting[PdaOperation.DirectOutbound] != true,
+          modifier = Modifier
+            .weight(1f)
+            .fillMaxHeight(),
+          colors = ButtonDefaults.outlinedButtonColors(contentColor = BluePrimary),
+          border = BorderStroke(2.dp, BluePrimary),
+          shape = RoundedCornerShape(14.dp)
+        ) {
+          Text("取消出库", color = BluePrimary, fontWeight = FontWeight.Black)
+        }
+        Button(
+          onClick = { viewModel.submit(PdaOperation.DirectOutbound) },
+          enabled = totalScanned > 0 &&
+            invalidCount == 0 &&
+            !targetMismatch &&
+            uiState.submitting[PdaOperation.DirectOutbound] != true &&
+            viewModel.canOperate(),
+          modifier = Modifier
+            .weight(2f)
+            .fillMaxHeight(),
+          colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+          shape = RoundedCornerShape(14.dp)
+        ) {
+          if (uiState.submitting[PdaOperation.DirectOutbound] == true) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+          } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+              Text("确认出库 $completedSku/$totalSku", color = Color.White, fontWeight = FontWeight.Black, maxLines = 1)
+              Text("已扫 $totalScanned · 异常 $invalidCount", color = Color.White.copy(alpha = 0.82f), fontSize = 11.sp)
+            }
+          }
+        }
+      }
+    }
+  ) { innerPadding ->
+    LazyColumn(
+      modifier = Modifier
+        .padding(innerPadding)
+        .fillMaxSize()
+        .background(AppSurface)
+        .statusBarsPadding()
+        .padding(horizontal = 20.dp),
+      verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+      item {
+        OutboundTopBar(
+          title = "出库单",
+          subtitle = outboundContextLabel(form, masterData),
+          onBack = { viewModel.goBackFromOperation(PdaOperation.DirectOutbound, fromScan = false) },
+          showBack = true,
+          showMore = false
+        )
+      }
+      item {
+        OutboundSectionHeader(icon = Icons.Outlined.Info, title = "基础信息")
+      }
+      item {
+        OutboundBaseInfoCard(
+          form = form,
+          warehouses = warehouses,
+          salespeople = salespeople,
+          locations = locations,
+          onUpdate = viewModel::updateForm
+        )
+      }
+      item {
+        OutboundSectionHeader(icon = Icons.Outlined.Inventory2, title = "货品明细")
+      }
+      item {
+        OutboundOrderGoodsCard(
+          selectedGoodsId = form.directGoodsId,
+          lines = uiState.outboundLines,
+          goods = goods,
+          availableQuantity = { goodsId -> availableQuantity(masterData, form.directSourceWarehouseId, goodsId) },
+          onSelectGoods = { selected -> viewModel.updateForm { current -> current.copy(directGoodsId = selected) } },
+          onAddGoods = { viewModel.addOrSelectOutboundLine() },
+          onEnterScan = { goodsId ->
+            viewModel.selectOutboundLine(goodsId)
+            viewModel.startScanning(PdaOperation.DirectOutbound)
+          },
+          onRemove = viewModel::removeOutboundLine
+        )
+      }
+      item { Spacer(modifier = Modifier.height(12.dp)) }
     }
   }
 }
 
 @Composable
 private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, viewModel: MainViewModel) {
+  if (operation == PdaOperation.DirectOutbound) {
+    DirectOutboundScanScreen(uiState = uiState, viewModel = viewModel)
+    return
+  }
+  if (operation == PdaOperation.FactoryInbound) {
+    LaunchedEffect(operation) {
+      viewModel.goBackFromOperation(operation, fromScan = true)
+    }
+    CenterLoadingCard("厂家到货按数量入库，无需扫码")
+    return
+  }
+
   val masterData = uiState.masterData ?: return
   val form = uiState.formState
   val barcodeInput = uiState.barcodeInputs[operation].orEmpty()
@@ -694,8 +868,1062 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
 }
 
 @Composable
+private fun DirectOutboundScanScreen(uiState: AppUiState, viewModel: MainViewModel) {
+  val masterData = uiState.masterData ?: return
+  val form = uiState.formState
+  val goods = masterData.goods.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+  val selectedLine = uiState.outboundLines.firstOrNull { it.goodsId == uiState.selectedOutboundGoodsId }
+  val barcodeInput = uiState.barcodeInputs[PdaOperation.DirectOutbound].orEmpty()
+
+  Scaffold(
+    containerColor = AppSurface,
+    contentWindowInsets = WindowInsets(0),
+    bottomBar = {
+      Button(
+        onClick = { viewModel.goBackFromOperation(PdaOperation.DirectOutbound, fromScan = true) },
+        modifier = Modifier
+          .fillMaxWidth()
+          .navigationBarsPadding()
+          .padding(horizontal = 18.dp, vertical = 14.dp)
+          .height(56.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+        shape = RoundedCornerShape(14.dp)
+      ) {
+        Text(if (selectedLine == null) "返回出库单" else "完成本货品", color = Color.White, fontWeight = FontWeight.Black)
+      }
+    }
+  ) { innerPadding ->
+    LazyColumn(
+      modifier = Modifier
+        .padding(innerPadding)
+        .fillMaxSize()
+        .background(AppSurface)
+        .statusBarsPadding()
+        .padding(horizontal = 16.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+      item {
+        OutboundTopBar(
+          subtitle = outboundContextLabel(form, masterData),
+          onBack = { viewModel.goBackFromOperation(PdaOperation.DirectOutbound, fromScan = true) }
+        )
+      }
+      if (selectedLine == null) {
+        item {
+          EmptyStateCard(
+            "未选择货品",
+            "请返回出库单选择货品后再进入扫码。"
+          )
+        }
+      } else {
+        item {
+          OutboundCurrentGoodsSummaryStrip(
+            line = selectedLine,
+            goods = goods,
+            availableQuantity = availableQuantity(masterData, form.directSourceWarehouseId, selectedLine.goodsId),
+            onTargetChange = viewModel::updateOutboundLineTarget
+          )
+        }
+        item {
+          OutboundScanInputCard(
+            value = barcodeInput,
+            onValueChange = { viewModel.updateBarcodeInput(PdaOperation.DirectOutbound, it) },
+            onAdd = { viewModel.addBarcodes(PdaOperation.DirectOutbound, it) },
+            onClear = { viewModel.clearBarcodeInput(PdaOperation.DirectOutbound) }
+          )
+        }
+        item {
+          OutboundScanRecordCard(
+            line = selectedLine,
+            onRemove = viewModel::removeOutboundBarcode
+          )
+        }
+      }
+      item { Spacer(modifier = Modifier.height(12.dp)) }
+    }
+  }
+}
+
+@Composable
+private fun OutboundTopBar(
+  title: String = "扫码出库",
+  subtitle: String,
+  onBack: () -> Unit,
+  showBack: Boolean = true,
+  showMore: Boolean = true
+) {
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(top = 10.dp, bottom = 2.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp)
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        if (showBack) {
+        IconButton(onClick = onBack) {
+          Icon(Icons.Outlined.ArrowBack, contentDescription = "返回", tint = Color(0xFF172033))
+        }
+        }
+      }
+      Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+      Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        if (showMore) {
+          Text("•••", color = Color(0xFF172033), fontWeight = FontWeight.Black)
+        }
+      }
+    }
+    Text(
+      subtitle,
+      modifier = Modifier.fillMaxWidth(),
+      textAlign = TextAlign.Center,
+      color = Color(0xFF687086),
+      fontWeight = FontWeight.SemiBold
+    )
+  }
+}
+
+@Composable
+private fun OutboundBaseInfoCard(
+  form: OperationFormState,
+  warehouses: List<com.warehouse.pda.data.WarehouseRecord>,
+  salespeople: List<com.warehouse.pda.data.Salesperson>,
+  locations: List<StorageLocation>,
+  onUpdate: ((OperationFormState) -> OperationFormState) -> Unit
+) {
+  Card(
+    shape = RoundedCornerShape(24.dp),
+    colors = CardDefaults.cardColors(containerColor = Color.White),
+    border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.35f)),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Column(
+      modifier = Modifier.padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+      OutboundSelectField(
+        label = "出库类型",
+        selectedId = form.directDestinationType,
+        options = listOf("sales" to "分销销售", "warehouse" to "调拨出库"),
+        placeholder = "请选择出库类型"
+      ) { selected ->
+        onUpdate { current -> current.copy(directDestinationType = selected) }
+      }
+      if (form.directDestinationType == "warehouse") {
+        OutboundSelectField(
+          label = "出库去向",
+          selectedId = form.directTargetWarehouseId,
+          options = warehouses.filter { it.id != form.directSourceWarehouseId }.map { it.id to it.name },
+          placeholder = "请选择出库去向"
+        ) { selected ->
+          onUpdate { current ->
+            current.copy(
+              directTargetWarehouseId = selected,
+              directTargetLocationId = firstLocationId(selected, locations)
+            )
+          }
+        }
+      } else {
+        OutboundSelectField(
+          label = "出库去向",
+          selectedId = form.directSalespersonId,
+          options = salespeople.map { it.id to "${it.name} (${it.code})" },
+          placeholder = "请选择出库去向"
+        ) { selected ->
+          onUpdate { current -> current.copy(directSalespersonId = selected) }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun OutboundSelectField(
+  label: String,
+  selectedId: String,
+  options: List<Pair<String, String>>,
+  placeholder: String = "请选择",
+  onSelect: (String) -> Unit
+) {
+  var expanded by remember { mutableStateOf(false) }
+  val selectedLabel = options.firstOrNull { it.first == selectedId }?.second ?: placeholder
+
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(label, color = Color(0xFF2B3140), fontSize = 18.sp, fontWeight = FontWeight.Black)
+    Box {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(56.dp)
+          .background(Color.White, RoundedCornerShape(16.dp))
+          .border(1.dp, CardBorder.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+          .clickable(enabled = options.isNotEmpty()) { expanded = true }
+          .padding(start = 16.dp, end = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          selectedLabel,
+          modifier = Modifier.weight(1f),
+          color = if (options.any { it.first == selectedId }) Color(0xFF172033) else MutedText,
+          fontWeight = FontWeight.Medium,
+          fontSize = 18.sp,
+          maxLines = 1
+        )
+        Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+          Icon(
+            Icons.Outlined.KeyboardArrowDown,
+            contentDescription = null,
+            tint = MutedText,
+            modifier = Modifier.size(28.dp)
+          )
+        }
+      }
+      DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        options.forEach { option ->
+          DropdownMenuItem(
+            text = { Text(option.second) },
+            onClick = {
+              expanded = false
+              onSelect(option.first)
+            }
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun CompactInfoRow(label: String, value: String) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(vertical = 9.dp),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    Text(label, color = MutedText, style = MaterialTheme.typography.bodyLarge)
+    Text(value, color = Color(0xFF172033), fontWeight = FontWeight.Bold, textAlign = TextAlign.End, style = MaterialTheme.typography.bodyLarge)
+  }
+  Box(
+    modifier = Modifier
+      .fillMaxWidth()
+      .height(1.dp)
+      .background(CardBorder)
+  )
+}
+
+@Composable
+private fun CompactDropdownRow(
+  label: String,
+  selectedId: String,
+  options: List<Pair<String, String>>,
+  onSelect: (String) -> Unit
+) {
+  var expanded by remember { mutableStateOf(false) }
+  val selectedLabel = options.firstOrNull { it.first == selectedId }?.second ?: "请选择"
+  Box {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clickable { expanded = true }
+        .padding(vertical = 9.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Text(label, color = MutedText, style = MaterialTheme.typography.bodyLarge)
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(selectedLabel, color = Color(0xFF172033), fontWeight = FontWeight.Bold, textAlign = TextAlign.End, style = MaterialTheme.typography.bodyLarge)
+        Text("›", color = MutedText, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+      }
+    }
+    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+      options.forEach { option ->
+        DropdownMenuItem(
+          text = { Text(option.second) },
+          onClick = {
+            expanded = false
+            onSelect(option.first)
+          }
+        )
+      }
+    }
+  }
+  Box(
+    modifier = Modifier
+      .fillMaxWidth()
+      .height(1.dp)
+      .background(CardBorder)
+  )
+}
+
+@Composable
+private fun SectionTitle(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String) {
+  Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(
+      modifier = Modifier
+        .size(34.dp)
+        .background(BlueSoft, CircleShape),
+      contentAlignment = Alignment.Center
+    ) {
+      Icon(icon, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(20.dp))
+    }
+    Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+  }
+}
+
+@Composable
+private fun CompactSectionTitle(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String) {
+  Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(
+      modifier = Modifier
+        .size(30.dp)
+        .background(BlueSoft, CircleShape),
+      contentAlignment = Alignment.Center
+    ) {
+      Icon(icon, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(18.dp))
+    }
+    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+  }
+}
+
+@Composable
+private fun OutboundSectionHeader(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(top = 4.dp),
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    Box(
+      modifier = Modifier
+        .size(40.dp)
+        .background(BlueSoft, RoundedCornerShape(10.dp)),
+      contentAlignment = Alignment.Center
+    ) {
+      Icon(icon, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(24.dp))
+    }
+    Text(title, fontSize = 24.sp, fontWeight = FontWeight.Black, color = Color(0xFF111827))
+  }
+}
+
+@Composable
+private fun OutboundOrderGoodsCard(
+  selectedGoodsId: String,
+  lines: List<OutboundLineState>,
+  goods: List<com.warehouse.pda.data.Goods>,
+  availableQuantity: (String) -> Int,
+  onSelectGoods: (String) -> Unit,
+  onAddGoods: () -> Unit,
+  onEnterScan: (String) -> Unit,
+  onRemove: (String) -> Unit
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    lines.forEach { line ->
+      OutboundOrderGoodsLine(
+        line = line,
+        goods = goods,
+        availableQuantity = availableQuantity(line.goodsId),
+        onEnterScan = onEnterScan,
+        onRemove = onRemove
+      )
+    }
+
+    OutboundAddGoodsPanel(
+      selectedGoodsId = selectedGoodsId,
+      goods = goods,
+      onSelectGoods = onSelectGoods,
+      onAddGoods = onAddGoods
+    )
+  }
+}
+
+@Composable
+private fun OutboundAddGoodsPanel(
+  selectedGoodsId: String,
+  goods: List<com.warehouse.pda.data.Goods>,
+  onSelectGoods: (String) -> Unit,
+  onAddGoods: () -> Unit
+) {
+  Card(
+    shape = RoundedCornerShape(24.dp),
+    colors = CardDefaults.cardColors(containerColor = Color.White),
+    border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.35f)),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Column(
+      modifier = Modifier.padding(16.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+      Text("添加货品", color = Color(0xFF172033), fontSize = 22.sp, fontWeight = FontWeight.Medium)
+      OutboundSelectField(
+        label = "选择货品",
+        selectedId = selectedGoodsId,
+        options = goods.map { it.id to "${it.name} (${it.code})" },
+        placeholder = "请选择货品",
+        onSelect = onSelectGoods
+      )
+      Button(
+        onClick = onAddGoods,
+        enabled = selectedGoodsId.isNotBlank(),
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(48.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = OrangeAccent),
+        shape = RoundedCornerShape(14.dp)
+      ) {
+        Text("添加", color = Color.White, fontWeight = FontWeight.Black)
+      }
+    }
+  }
+}
+
+@Composable
+private fun OutboundOrderGoodsLine(
+  line: OutboundLineState,
+  goods: List<com.warehouse.pda.data.Goods>,
+  availableQuantity: Int,
+  onEnterScan: (String) -> Unit,
+  onRemove: (String) -> Unit
+) {
+  val statusLabel = outboundLineStatusLabel(line)
+  val statusColor = outboundLineStatusColor(line)
+
+  Card(
+    shape = RoundedCornerShape(24.dp),
+    colors = CardDefaults.cardColors(containerColor = Color.White),
+    border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.35f)),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Column(
+      modifier = Modifier.padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top
+      ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(
+            goodsName(goods, line.goodsId),
+            color = Color(0xFF111827),
+            fontWeight = FontWeight.Medium,
+            fontSize = 22.sp
+          )
+          Text("代码: ${goodsCode(goods, line.goodsId)}", color = MutedText, fontWeight = FontWeight.Black, fontSize = 16.sp)
+        }
+        IconButton(onClick = { onRemove(line.goodsId) }, modifier = Modifier.size(40.dp)) {
+          Icon(Icons.Outlined.Close, contentDescription = "删除货品", tint = Color(0xFF424756), modifier = Modifier.size(28.dp))
+        }
+      }
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .background(Color(0xFFFDFDFF), RoundedCornerShape(16.dp))
+          .border(1.dp, CardBorder.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+          .padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        OutboundLineStat(
+          label = "可用库存",
+          value = availableQuantity.toString(),
+          dotColor = SuccessGreen,
+          modifier = Modifier.weight(1f)
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text("状态", color = MutedText, fontWeight = FontWeight.Black, fontSize = 16.sp)
+          CompactStatusChip(statusLabel, statusColor)
+        }
+      }
+
+      OutlinedButton(
+        onClick = { onEnterScan(line.goodsId) },
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(48.dp),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, BluePrimary),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = BlueSoft, contentColor = BluePrimary)
+      ) {
+        Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(22.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("进入扫码", color = BluePrimary, fontWeight = FontWeight.Black)
+      }
+    }
+  }
+}
+
+@Composable
+private fun OutboundLineStat(
+  label: String,
+  value: String,
+  dotColor: Color,
+  modifier: Modifier = Modifier
+) {
+  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(label, color = MutedText, fontWeight = FontWeight.Black, fontSize = 16.sp)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+      Box(modifier = Modifier.size(10.dp).background(dotColor, CircleShape))
+      Text(value, color = Color(0xFF111827), fontWeight = FontWeight.Black, fontSize = 20.sp)
+    }
+  }
+}
+
+@Composable
+private fun CompactStatusChip(label: String, background: Color) {
+  Box(
+    modifier = Modifier
+      .background(background, RoundedCornerShape(999.dp))
+      .padding(horizontal = 10.dp, vertical = 5.dp)
+  ) {
+    Text(label, color = Color.White, fontWeight = FontWeight.Black, fontSize = 12.sp)
+  }
+}
+
+@Composable
+private fun OutboundOrderProgressCard(lines: List<OutboundLineState>, invalidCount: Int) {
+  val total = lines.size
+  val completed = lines.count { outboundLineComplete(it) }
+  val progress = if (total == 0) 0f else completed.toFloat() / total.toFloat()
+
+  Card(shape = RoundedCornerShape(26.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column(
+      modifier = Modifier.padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+      Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+          modifier = Modifier
+            .size(34.dp)
+            .background(BlueSoft, CircleShape),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(Icons.Outlined.CallSplit, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(20.dp))
+        }
+        Text("出库进度", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+        Row(verticalAlignment = Alignment.Bottom) {
+          Text(completed.toString(), color = BluePrimary, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black)
+          Text(" / $total", color = Color(0xFF111726), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black)
+        }
+        Text("SKU $completed/$total  |  异常 $invalidCount", color = MutedText, fontWeight = FontWeight.SemiBold)
+      }
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(10.dp)
+          .background(Color(0xFFE9ECF3), RoundedCornerShape(99.dp))
+      ) {
+        Box(
+          modifier = Modifier
+            .fillMaxWidth(progress.coerceIn(0f, 1f))
+            .height(10.dp)
+            .background(BluePrimary, RoundedCornerShape(99.dp))
+        )
+      }
+      Text("${(progress * 100).toInt()}%", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End, color = MutedText)
+    }
+  }
+}
+
+@Composable
+private fun OutboundGoodsPickerCard(
+  selectedGoodsId: String,
+  activeGoodsId: String,
+  lines: List<OutboundLineState>,
+  goods: List<com.warehouse.pda.data.Goods>,
+  onSelectGoods: (String) -> Unit,
+  onSelectLine: (String) -> Unit,
+  onAddGoods: () -> Unit
+) {
+  Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      DropdownField("添加货品", selectedGoodsId, goods.map { it.id to "${it.name} (${it.code})" }, onSelectGoods)
+      Button(
+        onClick = onAddGoods,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(containerColor = OrangeAccent),
+        shape = RoundedCornerShape(16.dp)
+      ) {
+        Text("添加到出库单", color = Color.White, fontWeight = FontWeight.Black)
+      }
+      if (lines.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text("出库品类", color = MutedText, fontWeight = FontWeight.SemiBold)
+          lines.forEach { line ->
+            val active = line.goodsId == activeGoodsId
+            OutlinedButton(
+              onClick = { onSelectLine(line.goodsId) },
+              modifier = Modifier.fillMaxWidth(),
+              shape = RoundedCornerShape(16.dp)
+            ) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Text(goodsName(goods, line.goodsId), color = if (active) BluePrimary else Color(0xFF172033), fontWeight = FontWeight.Black)
+                Text(progressLabel(line), color = MutedText, fontWeight = FontWeight.SemiBold)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun OutboundCurrentGoodsSummaryStrip(
+  line: OutboundLineState,
+  goods: List<com.warehouse.pda.data.Goods>,
+  availableQuantity: Int,
+  onTargetChange: (String, String) -> Unit
+) {
+  val scannedCount = line.barcodes.size
+  val invalidCount = line.barcodes.count { line.reviews[it]?.isValid == false }
+  val targetQuantity = line.targetQuantity.toIntOrNull()
+  val remainingLabel = targetQuantity?.let { (it - scannedCount).coerceAtLeast(0).toString() } ?: "-"
+
+  Card(
+    shape = RoundedCornerShape(22.dp),
+    colors = CardDefaults.cardColors(containerColor = Color.White),
+    border = BorderStroke(1.dp, CardBorder.copy(alpha = 0.35f)),
+    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+  ) {
+    Column(
+      modifier = Modifier.padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top
+      ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text(
+            goodsName(goods, line.goodsId),
+            color = Color(0xFF111827),
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1
+          )
+          Text("代码: ${goodsCode(goods, line.goodsId)}", color = MutedText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        }
+        StatusChip("库存 $availableQuantity", Color(0xFFE8FBF3), SuccessGreen)
+      }
+
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .background(Color(0xFFFDFDFF), RoundedCornerShape(16.dp))
+          .border(1.dp, CardBorder.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+          .padding(horizontal = 10.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        OutboundScanTargetMetric(
+          value = line.targetQuantity,
+          onValueChange = { onTargetChange(line.goodsId, it) },
+          modifier = Modifier.weight(1f)
+        )
+        OutboundScanSummaryMetric("已扫", scannedCount.toString(), BluePrimary, Modifier.weight(1f))
+        OutboundScanSummaryMetric("剩余", remainingLabel, modifier = Modifier.weight(1f))
+        OutboundScanSummaryMetric("异常", invalidCount.toString(), if (invalidCount > 0) DangerRed else MutedText, Modifier.weight(1f))
+      }
+    }
+  }
+}
+
+@Composable
+private fun OutboundScanTargetMetric(
+  value: String,
+  onValueChange: (String) -> Unit,
+  modifier: Modifier = Modifier
+) {
+  Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text("应出", color = MutedText, fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1)
+    OutlinedTextField(
+      value = value,
+      onValueChange = onValueChange,
+      placeholder = { Text("未设", fontSize = 14.sp, fontWeight = FontWeight.Black) },
+      singleLine = true,
+      textStyle = MaterialTheme.typography.bodyLarge.copy(
+        color = Color(0xFF111827),
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Black,
+        textAlign = TextAlign.Center
+      ),
+      modifier = Modifier
+        .fillMaxWidth()
+        .height(56.dp),
+      shape = RoundedCornerShape(12.dp),
+      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
+    )
+  }
+}
+
+@Composable
+private fun OutboundScanSummaryMetric(
+  label: String,
+  value: String,
+  valueColor: Color = Color(0xFF111827),
+  modifier: Modifier = Modifier
+) {
+  Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text(label, color = MutedText, fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1)
+    Text(value, color = valueColor, fontSize = 17.sp, fontWeight = FontWeight.Black, maxLines = 1)
+  }
+}
+
+@Composable
+private fun OutboundCurrentGoodsCard(
+  line: OutboundLineState,
+  goods: List<com.warehouse.pda.data.Goods>,
+  availableQuantity: Int,
+  onTargetChange: (String, String) -> Unit,
+  onRemove: (String) -> Unit
+) {
+  val target = line.targetQuantity.toIntOrNull()
+  val remaining = target?.let { (it - line.barcodes.size).coerceAtLeast(0) }
+  Card(shape = RoundedCornerShape(26.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+          Box(
+            modifier = Modifier
+              .size(34.dp)
+              .background(BlueSoft, CircleShape),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(Icons.Outlined.Inventory2, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(20.dp))
+          }
+          Text("当前货品", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+        }
+        StatusChip("库存 $availableQuantity", Color(0xFFE8FBF3), SuccessGreen)
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+          Text(goodsName(goods, line.goodsId), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+          Text(goodsCode(goods, line.goodsId), color = MutedText, fontWeight = FontWeight.SemiBold)
+        }
+        IconButton(onClick = { onRemove(line.goodsId) }) {
+          Icon(Icons.Outlined.Close, contentDescription = "删除货品", tint = MutedText)
+        }
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+          value = line.targetQuantity,
+          onValueChange = { onTargetChange(line.goodsId, it) },
+          label = { Text("应出") },
+          placeholder = { Text("可选") },
+          singleLine = true,
+          modifier = Modifier.weight(1f),
+          shape = RoundedCornerShape(16.dp),
+          keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+        )
+        Box(
+          modifier = Modifier
+            .widthIn(min = 1.dp)
+            .height(72.dp)
+            .background(CardBorder)
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          Text("已扫 / 剩余", color = MutedText, fontWeight = FontWeight.SemiBold)
+          Row(verticalAlignment = Alignment.Bottom) {
+            Text(line.barcodes.size.toString(), color = BluePrimary, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+            Text(" / ${remaining?.toString() ?: "-"}", color = Color(0xFF172033), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun OutboundScanInputCard(
+  value: String,
+  onValueChange: (String) -> Unit,
+  onAdd: (String) -> Unit,
+  onClear: () -> Unit
+) {
+  Card(shape = RoundedCornerShape(26.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+          modifier = Modifier
+            .size(34.dp)
+            .background(BlueSoft, CircleShape),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(20.dp))
+        }
+        Text("扫描条码", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+      }
+      ScanInputRow(value = value, onValueChange = onValueChange, onAdd = onAdd, onClear = onClear)
+    }
+  }
+}
+
+@Composable
+private fun OutboundScanRecordCard(
+  line: OutboundLineState,
+  onRemove: (String) -> Unit
+) {
+  val invalidCount = line.barcodes.count { line.reviews[it]?.isValid == false }
+  Card(shape = RoundedCornerShape(26.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+          Box(
+            modifier = Modifier
+              .size(34.dp)
+              .background(BlueSoft, CircleShape),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(Icons.Outlined.QrCode2, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(20.dp))
+          }
+          Text("扫描记录", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+        }
+        Text("已扫 ${line.barcodes.size}  异常 $invalidCount", color = MutedText, fontWeight = FontWeight.SemiBold)
+      }
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(1.dp)
+          .background(CardBorder)
+      )
+      if (line.barcodes.isEmpty()) {
+        Text(
+          "暂无扫描记录",
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(22.dp),
+          textAlign = TextAlign.Center,
+          color = MutedText
+        )
+      } else {
+        line.barcodes.forEachIndexed { index, barcode ->
+          ScanRow(barcode, line.reviews[barcode], onRemove)
+          if (index != line.barcodes.lastIndex) {
+            Box(
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(CardBorder)
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun PdaTopBrandBar() {
+  Text(
+    "仓库管理系统",
+    color = PdaPrimaryStrong,
+    style = MaterialTheme.typography.headlineMedium,
+    fontWeight = FontWeight.Black,
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(top = 22.dp, bottom = 26.dp),
+    textAlign = TextAlign.Center
+  )
+}
+
+@Composable
+private fun HomeGreetingHeader(
+  displayName: String,
+  warehouseLabel: String,
+  warehouses: List<WarehouseRecord>,
+  selectedWarehouseId: String,
+  onWarehouseSelect: (String) -> Unit
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.Top
+  ) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+      Text(
+        "你好，$displayName",
+        color = PdaOnSurfaceVariant,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Medium
+      )
+      Text(
+        "请选择作业任务",
+        color = PdaOnSurface,
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Black
+      )
+    }
+    WarehousePill(
+      label = warehouseLabel,
+      warehouses = warehouses,
+      selectedWarehouseId = selectedWarehouseId,
+      onWarehouseSelect = onWarehouseSelect
+    )
+  }
+}
+
+@Composable
+private fun WarehousePill(
+  label: String,
+  warehouses: List<WarehouseRecord>,
+  selectedWarehouseId: String,
+  onWarehouseSelect: (String) -> Unit
+) {
+  var expanded by remember { mutableStateOf(false) }
+  Box {
+    Row(
+      modifier = Modifier
+        .widthIn(min = 154.dp, max = 190.dp)
+        .background(PdaSurfaceVariant, RoundedCornerShape(12.dp))
+        .border(1.dp, PdaOutlineVariant, RoundedCornerShape(12.dp))
+        .clickable(enabled = warehouses.isNotEmpty()) { expanded = true }
+        .padding(horizontal = 14.dp, vertical = 12.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Icon(Icons.Outlined.Inventory2, contentDescription = null, tint = PdaPrimaryStrong, modifier = Modifier.size(22.dp))
+      Text(
+        label,
+        color = PdaOnSurface,
+        fontWeight = FontWeight.Black,
+        style = MaterialTheme.typography.bodyLarge,
+        maxLines = 1,
+        modifier = Modifier.weight(1f)
+      )
+      Icon(
+        Icons.Outlined.KeyboardArrowDown,
+        contentDescription = "选择作业仓库",
+        tint = PdaOnSurfaceVariant,
+        modifier = Modifier.size(22.dp)
+      )
+    }
+    DropdownMenu(
+      expanded = expanded,
+      onDismissRequest = { expanded = false }
+    ) {
+      warehouses.forEach { warehouse ->
+        DropdownMenuItem(
+          text = {
+            Row(
+              modifier = Modifier.widthIn(min = 180.dp),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              if (warehouse.id == selectedWarehouseId) {
+                Icon(
+                  Icons.Outlined.CheckCircle,
+                  contentDescription = null,
+                  tint = PdaPrimaryStrong,
+                  modifier = Modifier.size(18.dp)
+                )
+              } else {
+                Spacer(Modifier.size(18.dp))
+              }
+              Text(warehouse.name, fontWeight = FontWeight.SemiBold, color = PdaOnSurface)
+            }
+          },
+          onClick = {
+            expanded = false
+            onWarehouseSelect(warehouse.id)
+          }
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun PdaHomeTaskCard(
+  title: String,
+  subtitle: String,
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  accentColor: Color,
+  tintColor: Color,
+  onClick: () -> Unit
+) {
+  Card(
+    modifier = Modifier
+      .fillMaxWidth()
+      .height(150.dp),
+    onClick = onClick,
+    shape = RoundedCornerShape(30.dp),
+    colors = CardDefaults.cardColors(containerColor = PdaSurface),
+    border = BorderStroke(1.dp, Color(0xFFE7E7F2))
+  ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+      Box(
+        modifier = Modifier
+          .align(Alignment.CenterEnd)
+          .width(230.dp)
+          .height(180.dp)
+          .background(tintColor, RoundedCornerShape(topStart = 120.dp, bottomStart = 120.dp))
+      )
+      Row(
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(horizontal = 26.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(26.dp), verticalAlignment = Alignment.CenterVertically) {
+          Box(
+            modifier = Modifier
+              .size(72.dp)
+              .background(accentColor, RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(40.dp))
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, color = PdaOnSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+            Text(
+              subtitle,
+              color = PdaOnSurfaceVariant,
+              style = MaterialTheme.typography.bodyMedium,
+              maxLines = 1
+            )
+          }
+        }
+        Text("›", color = Color(0xFF6E7280), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black)
+      }
+    }
+  }
+}
+
+@Composable
 private fun MainBottomBar(currentTab: MainTab, onSelect: (MainTab) -> Unit) {
-  NavigationBar(containerColor = Color.White) {
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .background(PdaSurface, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+      .navigationBarsPadding()
+      .padding(horizontal = 10.dp, vertical = 10.dp),
+    horizontalArrangement = Arrangement.SpaceAround,
+    verticalAlignment = Alignment.CenterVertically
+  ) {
     val items = listOf(
       Triple(MainTab.Home, "首页", Icons.Outlined.Home),
       Triple(MainTab.Query, "扫描", Icons.Outlined.QrCodeScanner),
@@ -704,13 +1932,51 @@ private fun MainBottomBar(currentTab: MainTab, onSelect: (MainTab) -> Unit) {
       Triple(MainTab.Profile, "我的", Icons.Outlined.AccountCircle)
     )
     items.forEach { (tab, label, icon) ->
-      NavigationBarItem(
+      PdaBottomNavItem(
         selected = tab == currentTab,
-        onClick = { onSelect(tab) },
-        icon = { Icon(icon, contentDescription = label) },
-        label = { Text(label) }
+        label = label,
+        icon = icon,
+        onClick = { onSelect(tab) }
       )
     }
+  }
+}
+
+@Composable
+private fun PdaBottomNavItem(
+  selected: Boolean,
+  label: String,
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  onClick: () -> Unit
+) {
+  Column(
+    modifier = Modifier
+      .width(72.dp)
+      .clickable(onClick = onClick)
+      .padding(vertical = 4.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(4.dp)
+  ) {
+    Box(
+      modifier = Modifier
+        .height(42.dp)
+        .width(if (selected) 64.dp else 42.dp)
+        .background(if (selected) BluePrimary else Color.Transparent, RoundedCornerShape(999.dp)),
+      contentAlignment = Alignment.Center
+    ) {
+      Icon(
+        icon,
+        contentDescription = label,
+        tint = if (selected) Color.White else PdaOnSurfaceVariant,
+        modifier = Modifier.size(26.dp)
+      )
+    }
+    Text(
+      label,
+      color = if (selected) BluePrimary else PdaOnSurface,
+      fontWeight = if (selected) FontWeight.Black else FontWeight.Medium,
+      style = MaterialTheme.typography.labelLarge
+    )
   }
 }
 
@@ -887,22 +2153,33 @@ private fun QueryPageShell(
   LazyColumn(
     modifier = Modifier
       .fillMaxSize()
-      .background(BlackPanel)
+      .background(PdaBackground)
       .statusBarsPadding()
-      .padding(horizontal = 18.dp),
+      .padding(horizontal = 20.dp),
     verticalArrangement = Arrangement.spacedBy(16.dp)
   ) {
     item {
-      Column(modifier = Modifier.padding(top = 14.dp, bottom = 4.dp)) {
-        Text(title, color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(subtitle, color = Color(0xFFC1C5D4))
+      Column(
+        modifier = Modifier.padding(top = 34.dp, bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        Text(
+          title,
+          color = PdaOnSurface,
+          style = MaterialTheme.typography.headlineMedium,
+          fontWeight = FontWeight.Black
+        )
+        Text(
+          subtitle,
+          color = PdaOnSurfaceVariant,
+          style = MaterialTheme.typography.bodyLarge
+        )
       }
     }
     item {
       Column(verticalArrangement = Arrangement.spacedBy(16.dp), content = content)
     }
-    item { Spacer(modifier = Modifier.height(16.dp)) }
+    item { Spacer(modifier = Modifier.height(96.dp)) }
   }
 }
 
@@ -998,10 +2275,11 @@ private fun OperationFields(
   operation: PdaOperation,
   form: OperationFormState,
   masterData: WarehouseState,
+  operatorName: String,
   onUpdate: ((OperationFormState) -> OperationFormState) -> Unit
 ) {
-  val warehouses = masterData.warehouses.filter { it.status == "enabled" }
-  val goods = masterData.goods.filter { it.status == "enabled" }
+  val warehouses = masterData.warehouses.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+  val goods = masterData.goods.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
   val salespeople = masterData.salespeople.filter { it.status == "enabled" }
   val terminalStores = masterData.terminalStores.filter { it.status == "enabled" }
   val locations = masterData.locations.filter { it.status == "enabled" }
@@ -1025,6 +2303,16 @@ private fun OperationFields(
         DropdownField("选择目标库位", form.factoryLocationId, locations.filter { it.warehouseId == form.factoryWarehouseId }.map { it.id to it.name }) { selected ->
           onUpdate { current: OperationFormState -> current.copy(factoryLocationId = selected) }
         }
+        OutlinedTextField(
+          value = form.factoryQuantity,
+          onValueChange = { value -> onUpdate { current -> current.copy(factoryQuantity = value.filter(Char::isDigit)) } },
+          label = { Text("入库数量") },
+          placeholder = { Text("请输入本次到货数量") },
+          singleLine = true,
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(16.dp)
+        )
+        StatusBanner("厂家到货按数量增加库存，不再要求逐条码扫码。", MessageTone.Info)
       }
     }
 
@@ -1111,7 +2399,8 @@ private fun OperationFields(
     }
 
     PdaOperation.DirectOutbound -> {
-      ConfigSectionCard("2. 直接出库配置") {
+      ConfigSectionCard("出库信息") {
+        KeyValueRow("操作人员", operatorName.ifBlank { "-" })
         DropdownField("出库仓库", form.directSourceWarehouseId, warehouses.map { it.id to it.name }) { selected ->
           onUpdate { current: OperationFormState ->
             val target = warehouses.firstOrNull { record -> record.id != selected }?.id.orEmpty()
@@ -1125,9 +2414,6 @@ private fun OperationFields(
             )
           }
         }
-        DropdownField("货物", form.directGoodsId, goods.map { it.id to "${it.name} (${it.code})" }) { selected ->
-          onUpdate { current: OperationFormState -> current.copy(directGoodsId = selected) }
-        }
         DropdownField(
           "出库去向",
           form.directDestinationType,
@@ -1135,8 +2421,6 @@ private fun OperationFields(
         ) { selected ->
           onUpdate { current: OperationFormState -> current.copy(directDestinationType = selected) }
         }
-      }
-      ConfigSectionCard("3. 去向信息") {
         if (form.directDestinationType == "warehouse") {
           DropdownField("目标仓库", form.directTargetWarehouseId, warehouses.filter { it.id != form.directSourceWarehouseId }.map { it.id to it.name }) { selected ->
             onUpdate { current: OperationFormState ->
@@ -1154,7 +2438,6 @@ private fun OperationFields(
             onUpdate { current: OperationFormState -> current.copy(directSalespersonId = selected) }
           }
         }
-        StatusBanner("直接出库会把新条码自动登记入库，再立即完成出库流转。", MessageTone.Info)
       }
     }
 
@@ -1179,8 +2462,8 @@ private fun OperationFields(
 @Composable
 private fun ContextStrip(operation: PdaOperation, form: OperationFormState, masterData: WarehouseState) {
   val locations = masterData.locations.filter { it.status == "enabled" }
-  val warehouses = masterData.warehouses.filter { it.status == "enabled" }
-  val goods = masterData.goods.filter { it.status == "enabled" }
+  val warehouses = masterData.warehouses.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
+  val goods = masterData.goods.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
   val summary = when (operation) {
     PdaOperation.FactoryInbound -> listOf(
       operation.title,
@@ -1206,7 +2489,6 @@ private fun ContextStrip(operation: PdaOperation, form: OperationFormState, mast
     PdaOperation.DirectOutbound -> listOf(
       operation.title,
       warehouseName(warehouses, form.directSourceWarehouseId),
-      goodsName(goods, form.directGoodsId),
       if (form.directDestinationType == "warehouse") warehouseName(warehouses, form.directTargetWarehouseId) else "分配销售"
     )
     PdaOperation.SalesReturn -> listOf(
@@ -1305,6 +2587,98 @@ private fun ScanStatusCard(
   }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun QueryCommandCard(
+  value: String,
+  onValueChange: (String) -> Unit,
+  loading: Boolean,
+  onSearch: (String) -> Unit,
+  onClear: () -> Unit
+) {
+  val focusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+
+  LaunchedEffect(Unit) {
+    focusRequester.requestFocus()
+    keyboardController?.hide()
+  }
+
+  Card(shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column(
+      modifier = Modifier.padding(18.dp),
+      verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+          Box(
+            modifier = Modifier
+              .size(54.dp)
+              .background(BlueSoft, RoundedCornerShape(18.dp)),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(Icons.Outlined.QrCodeScanner, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(30.dp))
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+              "等待扫码",
+              style = MaterialTheme.typography.headlineSmall,
+              fontWeight = FontWeight.Black,
+              color = Color(0xFF151B2D)
+            )
+            Text("扫码枪回车后自动查询", color = MutedText)
+          }
+        }
+      }
+
+      OutlinedTextField(
+        value = value,
+        onValueChange = { nextValue ->
+          handleScannerTextChange(nextValue, onValueChange, onSearch)
+        },
+        modifier = Modifier
+          .fillMaxWidth()
+          .focusRequester(focusRequester)
+          .submitOnScannerEnter(value, onSearch),
+        label = { Text("条码") },
+        placeholder = { Text("扫描或手动输入条码") },
+        shape = RoundedCornerShape(18.dp),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, showKeyboardOnFocus = false),
+        keyboardActions = KeyboardActions(onSearch = { onSearch(value) }, onDone = { onSearch(value) }),
+        trailingIcon = {
+          if (value.isNotBlank()) {
+            IconButton(onClick = onClear) {
+              Icon(Icons.Outlined.Close, contentDescription = "清空")
+            }
+          }
+        }
+      )
+      Button(
+        onClick = { onSearch(value) },
+        enabled = !loading,
+        shape = RoundedCornerShape(18.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(56.dp)
+      ) {
+        if (loading) {
+          CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+        } else {
+          Icon(Icons.Outlined.Search, contentDescription = null, tint = Color.White)
+          Spacer(modifier = Modifier.size(8.dp))
+          Text("立即查询", color = Color.White, fontWeight = FontWeight.Black)
+        }
+      }
+    }
+  }
+}
+
 @Composable
 private fun QueryInputRow(
   value: String,
@@ -1352,6 +2726,7 @@ private fun QueryInputRow(
   }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun ScanInputRow(
   value: String,
@@ -1359,6 +2734,14 @@ private fun ScanInputRow(
   onAdd: (String) -> Unit,
   onClear: () -> Unit
 ) {
+  val focusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+
+  LaunchedEffect(Unit) {
+    focusRequester.requestFocus()
+    keyboardController?.hide()
+  }
+
   Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
     OutlinedTextField(
       value = value,
@@ -1367,6 +2750,7 @@ private fun ScanInputRow(
       },
       modifier = Modifier
         .weight(1f)
+        .focusRequester(focusRequester)
         .submitOnScannerEnter(value, onAdd),
       label = { Text("输入条码") },
       shape = RoundedCornerShape(12.dp),
@@ -1460,6 +2844,7 @@ private fun ScanListCard(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ScanRow(
   barcode: String,
@@ -1469,15 +2854,45 @@ private fun ScanRow(
   val isError = review?.isValid == false
   val rowTint = if (isError) DangerRed else SuccessGreen
   val rowBackground = if (isError) Color(0xFFFFF4F4) else Color.White
-  Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .background(rowBackground)
-      .padding(horizontal = 16.dp, vertical = 14.dp),
-    horizontalArrangement = Arrangement.SpaceBetween,
-    verticalAlignment = Alignment.CenterVertically
+  val dismissState = rememberSwipeToDismissBoxState(
+    confirmValueChange = { value ->
+      if (value == SwipeToDismissBoxValue.EndToStart) {
+        onRemove(barcode)
+        true
+      } else {
+        false
+      }
+    }
+  )
+
+  SwipeToDismissBox(
+    state = dismissState,
+    enableDismissFromStartToEnd = false,
+    enableDismissFromEndToStart = true,
+    backgroundContent = {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(DangerRed)
+          .padding(horizontal = 20.dp),
+        contentAlignment = Alignment.CenterEnd
+      ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+          Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color.White)
+          Text("删除", color = Color.White, fontWeight = FontWeight.Black)
+        }
+      }
+    }
   ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .background(rowBackground)
+        .padding(horizontal = 16.dp, vertical = 14.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
       Icon(
         if (isError) Icons.Outlined.Warning else Icons.Outlined.CheckCircle,
         contentDescription = null,
@@ -1493,46 +2908,148 @@ private fun ScanRow(
           Text(review?.detail.orEmpty(), color = if (isError) DangerRed else MutedText)
         }
       }
-    }
-    IconButton(onClick = { onRemove(barcode) }) {
-      Icon(Icons.Outlined.Close, contentDescription = "删除", tint = if (isError) DangerRed else Color(0xFFC4C7D8))
+      }
+      IconButton(onClick = { onRemove(barcode) }) {
+        Icon(Icons.Outlined.Close, contentDescription = "删除", tint = if (isError) DangerRed else Color(0xFFC4C7D8))
+      }
     }
   }
 }
 
 @Composable
-private fun InventoryResultCard(result: InventoryDetailResult) {
-  Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-    Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Column {
-          Text(result.item.barcode, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
-          Text(if (result.item.ownerType == "warehouse") "当前在仓库存中" else "当前在销售人员名下", color = MutedText)
+private fun InventoryResultCard(result: InventoryDetailResult, masterData: WarehouseState) {
+  val item = result.item
+  val isInStock = item.status == "in_stock"
+  val ownerTitle = ownerTitle(item, masterData)
+  Card(shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top
+      ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(
+            item.barcode,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Black,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xFF151B2D)
+          )
+          Text(ownerTitle, color = MutedText)
         }
         StatusChip(
-          if (result.item.status == "in_stock") "库存中" else "随销售",
-          if (result.item.status == "in_stock") Color(0xFFE8FBF3) else Color(0xFFFFF2E5),
-          if (result.item.status == "in_stock") SuccessGreen else OrangeAccent
+          if (isInStock) "库存中" else "随销售",
+          if (isInStock) Color(0xFFE8FBF3) else Color(0xFFFFF2E5),
+          if (isInStock) SuccessGreen else OrangeAccent
         )
       }
-      KeyValueRow("货物 ID", result.item.goodsId)
-      KeyValueRow("仓库 ID", result.item.warehouseId ?: "-")
-      KeyValueRow("库位 ID", result.item.locationId ?: "-")
-      KeyValueRow("生产日期", result.item.productionDate ?: "-")
-      KeyValueRow("保质期", result.item.shelfLifeDate ?: "-")
-      Text("最近流转", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-      result.movements.take(4).forEach { movement ->
-        Card(
-          shape = RoundedCornerShape(18.dp),
-          colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F8FC))
+
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .background(Color(0xFFF7F8FE), RoundedCornerShape(20.dp))
+          .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+      ) {
+        QueryInfoRow("货品", goodsName(masterData.goods, item.goodsId).ifBlank { compactCode(item.goodsId) })
+        QueryInfoRow("当前归属", ownerTitle)
+        QueryInfoRow("生产日期", item.productionDate ?: "-")
+        QueryInfoRow("保质期", item.shelfLifeDate ?: "-")
+        QueryInfoRow("条码来源", inboundSourceLabel(item.inboundSource))
+      }
+
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+          modifier = Modifier
+            .size(28.dp)
+            .background(BlueSoft, CircleShape),
+          contentAlignment = Alignment.Center
         ) {
-          Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(movement.note, fontWeight = FontWeight.SemiBold)
-            Text("${movement.fromLabel} -> ${movement.toLabel}", color = MutedText)
-            Text("${movement.operator} · ${movement.occurredAt}", color = MutedText)
-          }
+          Icon(Icons.Outlined.CallSplit, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(18.dp))
+        }
+        Text("最近流转", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color(0xFF151B2D))
+      }
+
+      if (result.movements.isEmpty()) {
+        Text("暂无流转记录", color = MutedText)
+      } else {
+        result.movements.take(4).forEach { movement ->
+          MovementTimelineItem(movement)
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun QueryInfoRow(label: String, value: String) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.Top
+  ) {
+    Text(label, color = MutedText, fontWeight = FontWeight.SemiBold)
+    Text(
+      value,
+      modifier = Modifier.padding(start = 12.dp),
+      textAlign = TextAlign.End,
+      color = Color(0xFF1D2438),
+      fontWeight = FontWeight.Bold
+    )
+  }
+}
+
+@Composable
+private fun MovementTimelineItem(movement: com.warehouse.pda.data.StockMovement) {
+  Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+      Box(
+        modifier = Modifier
+          .size(10.dp)
+          .background(BluePrimary, CircleShape)
+      )
+      Box(
+        modifier = Modifier
+          .widthIn(min = 1.dp)
+          .height(54.dp)
+          .background(CardBorder)
+      )
+    }
+    Card(
+      modifier = Modifier.weight(1f),
+      shape = RoundedCornerShape(18.dp),
+      colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F8FC))
+    ) {
+      Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(movement.note, fontWeight = FontWeight.Black, color = Color(0xFF172033))
+        Text("${movement.fromLabel} -> ${movement.toLabel}", color = Color(0xFF4F566B))
+        Text("${movement.operator} · ${movement.occurredAt}", color = MutedText, style = MaterialTheme.typography.bodySmall)
+      }
+    }
+  }
+}
+
+@Composable
+private fun QueryEmptyStateCard() {
+  Card(shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(28.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+      Box(
+        modifier = Modifier
+          .size(68.dp)
+          .background(BlueSoft, RoundedCornerShape(22.dp)),
+        contentAlignment = Alignment.Center
+      ) {
+        Icon(Icons.Outlined.Search, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(36.dp))
+      }
+      Text("尚未查询", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+      Text("扫描后显示条码状态和当前归属。", textAlign = TextAlign.Center, color = MutedText)
     }
   }
 }
@@ -1567,6 +3084,17 @@ private fun CenterLoadingCard(text: String) {
       CircularProgressIndicator(color = BluePrimary)
       Text(text, color = MutedText)
     }
+  }
+}
+
+private fun operationIcon(operation: PdaOperation): androidx.compose.ui.graphics.vector.ImageVector {
+  return when (operation) {
+    PdaOperation.FactoryInbound -> Icons.Outlined.Login
+    PdaOperation.TerminalInbound -> Icons.Outlined.CallReceived
+    PdaOperation.SalesReturn -> Icons.Outlined.CallReceived
+    PdaOperation.Transfer -> Icons.Outlined.CallSplit
+    PdaOperation.SalesOutbound -> Icons.Outlined.Logout
+    PdaOperation.DirectOutbound -> Icons.Outlined.Logout
   }
 }
 
@@ -1614,6 +3142,90 @@ private fun HubOperationCard(
         }
       }
       Icon(Icons.Outlined.ArrowBack, contentDescription = null, tint = accentColor)
+    }
+  }
+}
+
+@Composable
+private fun OutboundLineCards(
+  lines: List<OutboundLineState>,
+  selectedGoodsId: String,
+  goods: List<com.warehouse.pda.data.Goods>,
+  availableQuantity: (String) -> Int,
+  onSelect: (String) -> Unit,
+  onTargetChange: (String, String) -> Unit,
+  onRemove: (String) -> Unit
+) {
+  if (lines.isEmpty()) {
+    Text("还没有货品行。添加后扫码会按当前选中的货品归类。", color = MutedText)
+    return
+  }
+
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    lines.forEach { line ->
+      val selected = line.goodsId == selectedGoodsId
+      val invalidCount = line.barcodes.count { line.reviews[it]?.isValid == false }
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .background(if (selected) BlueSoft else Color(0xFFF8F8FC), RoundedCornerShape(20.dp))
+          .border(1.dp, if (selected) BluePrimary else CardBorder, RoundedCornerShape(20.dp))
+          .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.Top
+        ) {
+          Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+            Text(
+              goodsName(goods, line.goodsId),
+              fontWeight = FontWeight.Black,
+              color = Color(0xFF172033),
+              style = MaterialTheme.typography.titleLarge
+            )
+            Text("可用 ${availableQuantity(line.goodsId)} 件", color = MutedText, style = MaterialTheme.typography.bodyMedium)
+          }
+          IconButton(onClick = { onRemove(line.goodsId) }) {
+            Icon(Icons.Outlined.Close, contentDescription = "删除货品行", tint = MutedText)
+          }
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          OutlinedButton(
+            onClick = { onSelect(line.goodsId) },
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(14.dp)
+          ) {
+            Text(if (selected) "正在扫码" else "开始扫码", fontWeight = FontWeight.Bold)
+          }
+          OutlinedTextField(
+            value = line.targetQuantity,
+            onValueChange = { onTargetChange(line.goodsId, it) },
+            label = { Text("数量") },
+            placeholder = { Text("可选") },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(14.dp)
+          )
+        }
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.72f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Text("已扫 ${line.barcodes.size}", color = Color(0xFF172033), fontWeight = FontWeight.Bold)
+          Text(remainingLabel(line), color = MutedText)
+          Text("异常 $invalidCount", color = if (invalidCount > 0) DangerRed else MutedText)
+        }
+      }
     }
   }
 }
@@ -1676,13 +3288,89 @@ private fun goodsName(goods: List<com.warehouse.pda.data.Goods>, id: String): St
   return goods.firstOrNull { it.id == id }?.name.orEmpty()
 }
 
+private fun goodsCode(goods: List<com.warehouse.pda.data.Goods>, id: String): String {
+  return goods.firstOrNull { it.id == id }?.code.orEmpty()
+}
+
+private fun outboundContextLabel(form: OperationFormState, masterData: WarehouseState): String {
+  val warehouse = warehouseName(masterData.warehouses, form.directSourceWarehouseId)
+  val destination = if (form.directDestinationType == "warehouse") "调拨出库" else "分销销售"
+  return listOf(warehouse, destination).filter { it.isNotBlank() }.joinToString(" · ")
+}
+
+private fun outboundLineComplete(line: OutboundLineState): Boolean {
+  val target = line.targetQuantity.toIntOrNull() ?: return false
+  if (target <= 0) return false
+  if (line.barcodes.any { line.reviews[it]?.isValid == false }) return false
+  return line.barcodes.size >= target
+}
+
+private fun outboundLineStatusLabel(line: OutboundLineState): String {
+  return when {
+    outboundLineComplete(line) -> "已完成"
+    line.barcodes.isNotEmpty() -> "进行中"
+    else -> "待扫码"
+  }
+}
+
+private fun outboundLineStatusColor(line: OutboundLineState): Color {
+  return when (outboundLineStatusLabel(line)) {
+    "已完成" -> SuccessGreen
+    "进行中" -> BluePrimary
+    else -> OrangeAccent
+  }
+}
+
+private fun ownerTitle(item: com.warehouse.pda.data.InventoryItem, masterData: WarehouseState): String {
+  if (item.ownerType == "warehouse") {
+    val warehouse = warehouseName(masterData.warehouses, item.warehouseId.orEmpty()).ifBlank { "未知仓库" }
+    val location = locationName(masterData.locations, item.locationId.orEmpty())
+    return if (location.isBlank()) warehouse else "$warehouse / $location"
+  }
+  return salespersonName(masterData.salespeople, item.salespersonId.orEmpty()).ifBlank { "未知销售人员" }
+}
+
+private fun inboundSourceLabel(source: String): String {
+  return when (source) {
+    "factory" -> "厂家到货"
+    "terminal_return" -> "终端退换货"
+    else -> source.ifBlank { "-" }
+  }
+}
+
+private fun compactCode(value: String): String {
+  if (value.length <= 12) return value.ifBlank { "-" }
+  return "${value.take(6)}…${value.takeLast(4)}"
+}
+
+private fun availableQuantity(masterData: WarehouseState, warehouseId: String, goodsId: String): Int {
+  return masterData.warehouseStocks.orEmpty().firstOrNull {
+    it.warehouseId == warehouseId && it.goodsId == goodsId
+  }?.quantity ?: 0
+}
+
+private fun salespersonName(salespeople: List<com.warehouse.pda.data.Salesperson>, id: String): String {
+  return salespeople.firstOrNull { it.id == id }?.name.orEmpty()
+}
+
+private fun progressLabel(line: OutboundLineState): String {
+  val target = line.targetQuantity.toIntOrNull()
+  return if (target == null) "${line.barcodes.size}" else "${line.barcodes.size}/$target"
+}
+
+private fun remainingLabel(line: OutboundLineState): String {
+  val target = line.targetQuantity.toIntOrNull() ?: return "未设目标"
+  val remaining = (target - line.barcodes.size).coerceAtLeast(0)
+  return if (remaining == 0) "已完成" else "剩余 $remaining 件"
+}
+
 private fun submitLabel(operation: PdaOperation): String {
   return when (operation) {
     PdaOperation.FactoryInbound,
     PdaOperation.TerminalInbound -> "入库"
     PdaOperation.Transfer -> "挪仓"
     PdaOperation.SalesOutbound -> "出库"
-    PdaOperation.DirectOutbound -> "直接出库"
+    PdaOperation.DirectOutbound -> "出库"
     PdaOperation.SalesReturn -> "回流"
   }
 }
