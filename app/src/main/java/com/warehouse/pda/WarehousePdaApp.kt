@@ -460,6 +460,15 @@ private fun DashboardScreen(uiState: AppUiState, viewModel: MainViewModel) {
           onWarehouseSelect = viewModel::selectWorkWarehouse
         )
       }
+      uiState.pendingSubmission?.let { pending ->
+        item {
+          PendingSubmissionCard(
+            summary = pending.summary,
+            retrying = uiState.pendingSubmissionRetrying,
+            onRetry = viewModel::retryPendingSubmission
+          )
+        }
+      }
       item {
         PdaHomeTaskCard(
           title = "扫码查询",
@@ -496,6 +505,42 @@ private fun DashboardScreen(uiState: AppUiState, viewModel: MainViewModel) {
         }
       }
       item { Spacer(modifier = Modifier.height(24.dp)) }
+    }
+  }
+}
+
+@Composable
+private fun PendingSubmissionCard(
+  summary: String,
+  retrying: Boolean,
+  onRetry: () -> Unit
+) {
+  Card(
+    shape = RoundedCornerShape(20.dp),
+    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF5E8)),
+    border = BorderStroke(1.dp, OrangeAccent.copy(alpha = 0.45f))
+  ) {
+    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Outlined.Warning, contentDescription = null, tint = OrangeAccent)
+        Column(modifier = Modifier.weight(1f)) {
+          Text("有一笔业务等待确认", fontWeight = FontWeight.Black, color = Color(0xFF172033))
+          Text(summary, color = MutedText)
+        }
+      }
+      Button(
+        onClick = onRetry,
+        enabled = !retrying,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(containerColor = OrangeAccent),
+        shape = RoundedCornerShape(12.dp)
+      ) {
+        if (retrying) {
+          CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+        } else {
+          Text("确认处理结果", color = Color.White, fontWeight = FontWeight.Black)
+        }
+      }
     }
   }
 }
@@ -670,6 +715,7 @@ private fun OperationConfigScreen(uiState: AppUiState, operation: PdaOperation, 
       form = form,
       masterData = masterData,
       operatorName = uiState.currentUser?.displayName.orEmpty(),
+      contextLocked = uiState.barcodeLists[operation].orEmpty().isNotEmpty(),
       onUpdate = viewModel::updateForm
     )
     Button(
@@ -718,6 +764,7 @@ private fun DirectOutboundOrderScreen(uiState: AppUiState, viewModel: MainViewMo
   val locations = masterData.locations.filter { it.status == "enabled" }
   val totalScanned = uiState.outboundLines.sumOf { it.barcodes.size }
   val invalidCount = uiState.outboundLines.sumOf { line -> line.barcodes.count { line.reviews[it]?.isValid == false } }
+  val pendingCount = uiState.outboundLines.sumOf { line -> line.barcodes.count { line.reviews[it] == null } }
   val totalSku = uiState.outboundLines.size
   val completedSku = uiState.outboundLines.count { outboundLineComplete(it) }
   val targetMismatch = uiState.outboundLines.any { line ->
@@ -729,6 +776,8 @@ private fun DirectOutboundOrderScreen(uiState: AppUiState, viewModel: MainViewMo
   }
   val submitDetailText = if (stockShortage) {
     "库存不足 · 异常 $invalidCount"
+  } else if (pendingCount > 0) {
+    "校验中 $pendingCount · 异常 $invalidCount"
   } else {
     "已扫 $totalScanned · 异常 $invalidCount"
   }
@@ -762,7 +811,10 @@ private fun DirectOutboundOrderScreen(uiState: AppUiState, viewModel: MainViewMo
           onClick = { viewModel.submit(PdaOperation.DirectOutbound) },
           enabled = totalScanned > 0 &&
             invalidCount == 0 &&
+            pendingCount == 0 &&
             !targetMismatch &&
+            !stockShortage &&
+            uiState.pendingSubmission == null &&
             uiState.submitting[PdaOperation.DirectOutbound] != true &&
             viewModel.canOperate(),
           modifier = Modifier
@@ -856,6 +908,7 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
   val barcodeList = uiState.barcodeLists[operation].orEmpty()
   val barcodeReviews = uiState.barcodeReviews[operation].orEmpty()
   val invalidCount = barcodeList.count { code -> barcodeReviews[code]?.isValid == false }
+  val pendingCount = barcodeList.count { code -> barcodeReviews[code] == null }
 
   Scaffold(
     containerColor = AppSurface,
@@ -865,6 +918,8 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
         onClick = { viewModel.submit(operation) },
         enabled = barcodeList.isNotEmpty() &&
           invalidCount == 0 &&
+          pendingCount == 0 &&
+          uiState.pendingSubmission == null &&
           uiState.submitting[operation] != true &&
           viewModel.canOperate(),
         modifier = Modifier
@@ -1493,7 +1548,12 @@ private fun OutboundGoodsPickerCard(
 ) {
   Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-      DropdownField("添加货品", selectedGoodsId, goods.map { it.id to "${it.name} (${it.code})" }, onSelectGoods)
+      DropdownField(
+        "添加货品",
+        selectedGoodsId,
+        goods.map { it.id to "${it.name} (${it.code})" },
+        onSelect = onSelectGoods
+      )
       Button(
         onClick = onAddGoods,
         modifier = Modifier.fillMaxWidth(),
@@ -1726,6 +1786,7 @@ private fun OutboundScanRecordCard(
   onRemove: (String) -> Unit
 ) {
   val invalidCount = line.barcodes.count { line.reviews[it]?.isValid == false }
+  val pendingCount = line.barcodes.count { line.reviews[it] == null }
   Card(shape = RoundedCornerShape(26.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
     Column {
       Row(
@@ -1746,7 +1807,7 @@ private fun OutboundScanRecordCard(
           }
           Text("扫描记录", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = Color(0xFF172033))
         }
-        Text("已扫 ${line.barcodes.size}  异常 $invalidCount", color = MutedText, fontWeight = FontWeight.SemiBold)
+        Text("已扫 ${line.barcodes.size}  校验中 $pendingCount  异常 $invalidCount", color = MutedText, fontWeight = FontWeight.SemiBold)
       }
       Box(
         modifier = Modifier
@@ -2321,6 +2382,7 @@ private fun OperationFields(
   form: OperationFormState,
   masterData: WarehouseState,
   operatorName: String,
+  contextLocked: Boolean,
   onUpdate: ((OperationFormState) -> OperationFormState) -> Unit
 ) {
   val warehouses = masterData.warehouses.filter { it.status == "enabled" }.sortedBy { it.sortOrder }
@@ -2376,7 +2438,12 @@ private fun OperationFields(
         }
       }
       ConfigSectionCard("3. 补充回仓信息") {
-        DropdownField("选择货物", form.terminalGoodsId, goods.map { it.id to "${it.name} (${it.code})" }) { selected ->
+        DropdownField(
+          "选择货物",
+          form.terminalGoodsId,
+          goods.map { it.id to "${it.name} (${it.code})" },
+          enabled = !contextLocked
+        ) { selected ->
           onUpdate { current: OperationFormState -> current.copy(terminalGoodsId = selected) }
         }
         DropdownField("终端店铺", form.terminalStoreId, terminalStores.map { it.id to it.name }) { selected ->
@@ -2400,46 +2467,6 @@ private fun OperationFields(
           },
           MessageTone.Info
         )
-      }
-    }
-
-    PdaOperation.Transfer -> {
-      ConfigSectionCard("2. 仓间调拨配置") {
-        DropdownField("源仓库", form.transferSourceWarehouseId, warehouses.map { it.id to it.name }) { selected ->
-          onUpdate { current: OperationFormState ->
-            val target = warehouses.firstOrNull { record -> record.id != selected }?.id.orEmpty()
-            current.copy(
-              transferSourceWarehouseId = selected,
-              transferTargetWarehouseId = if (current.transferTargetWarehouseId == selected) target else current.transferTargetWarehouseId,
-              transferTargetLocationId = firstLocationId(
-                if (current.transferTargetWarehouseId == selected) target else current.transferTargetWarehouseId,
-                locations
-              )
-            )
-          }
-        }
-        DropdownField("目标仓库", form.transferTargetWarehouseId, warehouses.filter { it.id != form.transferSourceWarehouseId }.map { it.id to it.name }) { selected ->
-          onUpdate { current: OperationFormState ->
-            current.copy(
-              transferTargetWarehouseId = selected,
-              transferTargetLocationId = firstLocationId(selected, locations)
-            )
-          }
-        }
-        DropdownField("目标库位", form.transferTargetLocationId, locations.filter { it.warehouseId == form.transferTargetWarehouseId }.map { it.id to it.name }) { selected ->
-          onUpdate { current: OperationFormState -> current.copy(transferTargetLocationId = selected) }
-        }
-      }
-    }
-
-    PdaOperation.SalesOutbound -> {
-      ConfigSectionCard("2. 销售出库配置") {
-        DropdownField("出库仓库", form.salesWarehouseId, warehouses.map { it.id to it.name }) { selected ->
-          onUpdate { current: OperationFormState -> current.copy(salesWarehouseId = selected) }
-        }
-        DropdownField("销售人员", form.salesSalespersonId, salespeople.map { it.id to "${it.name} (${it.code})" }) { selected ->
-          onUpdate { current: OperationFormState -> current.copy(salesSalespersonId = selected) }
-        }
       }
     }
 
@@ -2521,15 +2548,6 @@ private fun ContextStrip(operation: PdaOperation, form: OperationFormState, mast
       warehouseName(warehouses, form.terminalWarehouseId),
       locationName(locations, form.terminalLocationId),
       goodsName(goods, form.terminalGoodsId)
-    )
-    PdaOperation.Transfer -> listOf(
-      operation.title,
-      warehouseName(warehouses, form.transferSourceWarehouseId),
-      warehouseName(warehouses, form.transferTargetWarehouseId)
-    )
-    PdaOperation.SalesOutbound -> listOf(
-      operation.title,
-      warehouseName(warehouses, form.salesWarehouseId)
     )
     PdaOperation.DirectOutbound -> listOf(
       operation.title,
@@ -2861,7 +2879,10 @@ private fun ScanListCard(
       Column(modifier = Modifier.padding(18.dp)) {
         Text("已扫描明细", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(4.dp))
-        Text("成功 ${barcodeList.count { barcodeReviews[it]?.isValid != false }} 条，异常 ${barcodeList.count { barcodeReviews[it]?.isValid == false }} 条", color = MutedText)
+        Text(
+          "通过 ${barcodeList.count { barcodeReviews[it]?.isValid == true }} 条，校验中 ${barcodeList.count { barcodeReviews[it] == null }} 条，异常 ${barcodeList.count { barcodeReviews[it]?.isValid == false }} 条",
+          color = MutedText
+        )
       }
       Box(
         modifier = Modifier
@@ -2897,7 +2918,12 @@ private fun ScanRow(
   onRemove: (String) -> Unit
 ) {
   val isError = review?.isValid == false
-  val rowTint = if (isError) DangerRed else SuccessGreen
+  val isPending = review == null
+  val rowTint = when {
+    isError -> DangerRed
+    isPending -> BluePrimary
+    else -> SuccessGreen
+  }
   val rowBackground = if (isError) Color(0xFFFFF4F4) else Color.White
   val dismissState = rememberSwipeToDismissBoxState(
     confirmValueChange = { value ->
@@ -2938,11 +2964,15 @@ private fun ScanRow(
       verticalAlignment = Alignment.CenterVertically
     ) {
       Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-      Icon(
-        if (isError) Icons.Outlined.Warning else Icons.Outlined.CheckCircle,
-        contentDescription = null,
-        tint = rowTint
-      )
+      if (isPending) {
+        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = rowTint)
+      } else {
+        Icon(
+          if (isError) Icons.Outlined.Warning else Icons.Outlined.CheckCircle,
+          contentDescription = null,
+          tint = rowTint
+        )
+      }
       Column {
         Text(
           barcode,
@@ -2951,6 +2981,8 @@ private fun ScanRow(
         )
         if (!review?.detail.isNullOrBlank()) {
           Text(review?.detail.orEmpty(), color = if (isError) DangerRed else MutedText)
+        } else if (isPending) {
+          Text("正在校验", color = BluePrimary)
         }
       }
       }
@@ -3137,8 +3169,6 @@ private fun operationIcon(operation: PdaOperation): androidx.compose.ui.graphics
     PdaOperation.FactoryInbound -> Icons.Outlined.Login
     PdaOperation.TerminalInbound -> Icons.Outlined.CallReceived
     PdaOperation.SalesReturn -> Icons.Outlined.CallReceived
-    PdaOperation.Transfer -> Icons.Outlined.CallSplit
-    PdaOperation.SalesOutbound -> Icons.Outlined.Logout
     PdaOperation.DirectOutbound -> Icons.Outlined.Logout
   }
 }
@@ -3173,8 +3203,6 @@ private fun HubOperationCard(
               PdaOperation.FactoryInbound -> Icons.Outlined.Login
               PdaOperation.TerminalInbound -> Icons.Outlined.CallReceived
               PdaOperation.SalesReturn -> Icons.Outlined.CallReceived
-              PdaOperation.Transfer -> Icons.Outlined.CallSplit
-              PdaOperation.SalesOutbound -> Icons.Outlined.Logout
               PdaOperation.DirectOutbound -> Icons.Outlined.Logout
             },
             contentDescription = null,
@@ -3281,6 +3309,7 @@ private fun DropdownField(
   label: String,
   selectedId: String,
   options: List<Pair<String, String>>,
+  enabled: Boolean = true,
   onSelect: (String) -> Unit
 ) {
   var expanded by remember { mutableStateOf(false) }
@@ -3290,6 +3319,7 @@ private fun DropdownField(
     Text(label, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF2A3040))
     OutlinedButton(
       onClick = { expanded = true },
+      enabled = enabled,
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(16.dp)
     ) {
@@ -3346,7 +3376,7 @@ private fun outboundContextLabel(form: OperationFormState, masterData: Warehouse
 private fun outboundLineComplete(line: OutboundLineState): Boolean {
   val target = line.targetQuantity.toIntOrNull() ?: return false
   if (target <= 0) return false
-  if (line.barcodes.any { line.reviews[it]?.isValid == false }) return false
+  if (line.barcodes.any { line.reviews[it]?.isValid != true }) return false
   return line.barcodes.size >= target
 }
 
@@ -3413,8 +3443,6 @@ private fun submitLabel(operation: PdaOperation): String {
   return when (operation) {
     PdaOperation.FactoryInbound,
     PdaOperation.TerminalInbound -> "入库"
-    PdaOperation.Transfer -> "挪仓"
-    PdaOperation.SalesOutbound -> "出库"
     PdaOperation.DirectOutbound -> "出库"
     PdaOperation.SalesReturn -> "回流"
   }

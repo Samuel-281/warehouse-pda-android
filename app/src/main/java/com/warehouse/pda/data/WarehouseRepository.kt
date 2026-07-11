@@ -16,6 +16,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
+import java.io.IOException
 import java.net.CookieManager
 import java.net.CookiePolicy
 
@@ -73,9 +74,56 @@ class WarehouseRepository(context: Context) {
     credentialStore.clear()
   }
 
+  fun getPendingSubmission(): PendingSubmission? {
+    val json = preferences.getString(KEY_PENDING_SUBMISSION, null) ?: return null
+    return runCatching { gson.fromJson(json, PendingSubmission::class.java) }
+      .getOrElse {
+        clearPendingSubmission()
+        null
+      }
+  }
+
+  suspend fun savePendingSubmission(
+    kind: String,
+    requestId: String,
+    request: Any,
+    summary: String
+  ): PendingSubmission = withContext(Dispatchers.IO) {
+    val pending = PendingSubmission(
+      kind = kind,
+      requestId = requestId,
+      requestJson = gson.toJson(request),
+      summary = summary,
+      createdAt = System.currentTimeMillis()
+    )
+    check(preferences.edit().putString(KEY_PENDING_SUBMISSION, gson.toJson(pending)).commit()) {
+      "无法保存待确认业务，请释放设备存储空间后重试"
+    }
+    pending
+  }
+
+  fun clearPendingSubmission() {
+    preferences.edit().remove(KEY_PENDING_SUBMISSION).apply()
+  }
+
+  suspend fun retryPendingSubmission(serverUrl: String, pending: PendingSubmission): SubmitResult {
+    return when (pending.kind) {
+      PENDING_INBOUND -> submitInbound(serverUrl, gson.fromJson(pending.requestJson, InboundSubmitRequest::class.java))
+      PENDING_OUTBOUND -> submitOutbound(serverUrl, gson.fromJson(pending.requestJson, OutboundSubmitRequest::class.java))
+      PENDING_SALES_RETURN -> submitSalesReturn(serverUrl, gson.fromJson(pending.requestJson, SalesReturnSubmitRequest::class.java))
+      else -> throw IllegalArgumentException("无法识别待确认业务，请升级应用后重试")
+    }
+  }
+
   suspend fun checkHealth(serverUrl: String): HealthStatus = withContext(Dispatchers.IO) {
     val normalized = normalizeBaseUrl(serverUrl)
-    val response = api(normalized).health()
+    val response = try {
+      api(normalized).health()
+    } catch (error: IOException) {
+      throw NetworkRequestException("无法连接服务器，请检查网络后重试", error)
+    } catch (error: RuntimeException) {
+      throw ResponseReadException("服务器响应格式不正确", error)
+    }
     val health = response.body()?.data
     if (health == null) {
       throw ApiRequestException(response.code(), parseError(response) ?: "无法读取服务器健康状态")
@@ -125,7 +173,15 @@ class WarehouseRepository(context: Context) {
     serverUrl: String,
     block: suspend WarehouseApi.() -> Response<ApiEnvelope<T>>
   ): T = withContext(Dispatchers.IO) {
-    val response = api(normalizeBaseUrl(serverUrl)).block()
+    val response = try {
+      api(normalizeBaseUrl(serverUrl)).block()
+    } catch (error: IOException) {
+      throw NetworkRequestException("网络请求未完成，请检查网络后重试", error)
+    } catch (error: IllegalArgumentException) {
+      throw error
+    } catch (error: RuntimeException) {
+      throw ResponseReadException("服务器已响应，但处理结果无法确认", error)
+    }
     val body = response.body()
     if (response.isSuccessful && body?.data != null) {
       return@withContext body.data
@@ -171,8 +227,12 @@ class WarehouseRepository(context: Context) {
     return parsed.toString()
   }
 
-  private companion object {
-    const val SUPPORTED_API_CONTRACT = "1"
+  companion object {
+    private const val SUPPORTED_API_CONTRACT = "1"
+    private const val KEY_PENDING_SUBMISSION = "pending_submission"
+    const val PENDING_INBOUND = "inbound"
+    const val PENDING_OUTBOUND = "outbound"
+    const val PENDING_SALES_RETURN = "sales_return"
   }
 }
 
@@ -180,6 +240,25 @@ class ApiRequestException(
   val statusCode: Int,
   override val message: String
 ) : IllegalStateException(message)
+
+class NetworkRequestException(
+  override val message: String,
+  cause: Throwable
+) : IOException(message, cause)
+
+class ResponseReadException(
+  override val message: String,
+  cause: Throwable
+) : IllegalStateException(message, cause)
+
+fun shouldRetainPendingSubmission(error: Throwable): Boolean {
+  if (error is NetworkRequestException || error is ResponseReadException) return true
+  if (error is ApiRequestException) {
+    if (error.statusCode == 401 || error.statusCode >= 500) return true
+    if (error.statusCode == 409 && error.message.contains("处理中")) return true
+  }
+  return false
+}
 
 private interface WarehouseApi {
   @GET("api/health")

@@ -156,7 +156,8 @@ data class InboundSubmitRequest(
   val terminalStoreId: String? = null,
   val productionDate: String? = null,
   val quantity: Int? = null,
-  val barcodes: List<String> = emptyList()
+  val barcodes: List<String> = emptyList(),
+  val clientRequestId: String? = null
 )
 
 data class OutboundLineSubmitRequest(
@@ -173,13 +174,23 @@ data class OutboundSubmitRequest(
   val salespersonId: String? = null,
   val goodsId: String? = null,
   val barcodes: List<String> = emptyList(),
-  val lines: List<OutboundLineSubmitRequest>? = null
+  val lines: List<OutboundLineSubmitRequest>? = null,
+  val clientRequestId: String? = null
 )
 
 data class SalesReturnSubmitRequest(
   val returnWarehouseId: String,
   val returnLocationId: String,
-  val barcodes: List<String>
+  val barcodes: List<String>,
+  val clientRequestId: String? = null
+)
+
+data class PendingSubmission(
+  val kind: String,
+  val requestId: String,
+  val requestJson: String,
+  val summary: String,
+  val createdAt: Long
 )
 
 data class SubmitResult(
