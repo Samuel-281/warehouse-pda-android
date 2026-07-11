@@ -11,11 +11,11 @@ android {
     applicationId = "com.warehouse.pda"
     minSdk = 26
     targetSdk = 35
-    versionCode = 6
-    versionName = "0.1.5"
+    versionCode = 7
+    versionName = "0.2.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://192.168.1.100:3000/\"")
+    buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://43.108.14.102/\"")
   }
 
   buildTypes {
