@@ -14,6 +14,7 @@ import com.warehouse.pda.data.PendingSubmission
 import com.warehouse.pda.data.PdaReleaseInfo
 import com.warehouse.pda.data.SalesReturnSubmitRequest
 import com.warehouse.pda.data.StorageLocation
+import com.warehouse.pda.data.SubmissionPolicy
 import com.warehouse.pda.data.SubmitResult
 import com.warehouse.pda.data.WarehouseRepository
 import com.warehouse.pda.data.WarehouseState
@@ -524,8 +525,8 @@ class MainViewModel(
       return
     }
 
-    val remainingCapacity = MAX_BARCODES_PER_SUBMISSION - existing.size
-    if (fresh.size > remainingCapacity) {
+    val remainingCapacity = SubmissionPolicy.remainingCapacity(existing.size)
+    if (!SubmissionPolicy.accepts(existing.size, fresh.size)) {
       _uiState.update {
         it.copy(
           message = StatusMessage(MessageTone.Error, "单次最多 $MAX_BARCODES_PER_SUBMISSION 个条码，当前还可添加 $remainingCapacity 个"),
@@ -652,8 +653,8 @@ class MainViewModel(
       return
     }
 
-    val remainingCapacity = MAX_BARCODES_PER_SUBMISSION - allExisting.size
-    if (fresh.size > remainingCapacity) {
+    val remainingCapacity = SubmissionPolicy.remainingCapacity(allExisting.size)
+    if (!SubmissionPolicy.accepts(allExisting.size, fresh.size)) {
       _uiState.update {
         it.copy(
           barcodeInputs = it.barcodeInputs + (PdaOperation.DirectOutbound to ""),
@@ -1362,7 +1363,7 @@ class MainViewModel(
   }
 
   companion object {
-    const val MAX_BARCODES_PER_SUBMISSION = 500
+    const val MAX_BARCODES_PER_SUBMISSION = SubmissionPolicy.MAX_BARCODES
 
     fun factory(repository: WarehouseRepository): ViewModelProvider.Factory {
       return object : ViewModelProvider.Factory {
