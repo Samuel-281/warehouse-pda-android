@@ -1,6 +1,5 @@
 package com.warehouse.pda
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -178,7 +177,6 @@ data class AppUiState(
 class MainViewModel(
   private val repository: WarehouseRepository
 ) : ViewModel() {
-  private val logTag = "WarehousePda"
   private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
   private val _uiState = MutableStateFlow(
@@ -204,10 +202,15 @@ class MainViewModel(
         )
       }
 
-      val restoredUser = runCatching {
-        repository.getCurrentUser(serverUrl)
-      }.getOrElse {
-        autoLoginIfPossible(loginForm)
+      val healthResult = runCatching { repository.checkHealth(serverUrl) }
+      val restoredUser = if (healthResult.isSuccess) {
+        runCatching {
+          repository.getCurrentUser(serverUrl)
+        }.getOrElse {
+          autoLoginIfPossible(loginForm)
+        }
+      } else {
+        null
       }
 
       if (restoredUser != null) {
@@ -223,7 +226,9 @@ class MainViewModel(
           it.copy(
             currentUser = null,
             route = AppRoute.Login,
-            message = null
+            message = healthResult.exceptionOrNull()?.let { error ->
+              StatusMessage(MessageTone.Error, error.message ?: "服务器暂不可用")
+            }
           )
         }
       }
@@ -302,14 +307,24 @@ class MainViewModel(
     viewModelScope.launch {
       _uiState.update { it.copy(loginPending = true, message = null) }
       runCatching {
-        repository.saveServerUrl(form.serverUrl)
-        repository.login(form.serverUrl, trimmedUsername, form.password)
+        repository.checkHealth(form.serverUrl)
+        repository.login(form.serverUrl, trimmedUsername, form.password).also {
+          repository.saveServerUrl(form.serverUrl)
+        }
       }.onSuccess { user ->
-        if (form.rememberCredentials) {
+        val credentialsSaved = if (form.rememberCredentials) {
           repository.saveRememberCredentials(true)
-          repository.saveCredentials(trimmedUsername, form.password)
+          repository.saveCredentials(trimmedUsername, form.password).also { saved ->
+            if (!saved) {
+              repository.saveRememberCredentials(false)
+            }
+          }
         } else {
           repository.saveRememberCredentials(false)
+          repository.clearCredentials()
+          false
+        }
+        if (!credentialsSaved && form.rememberCredentials) {
           repository.clearCredentials()
         }
         _uiState.update {
@@ -319,9 +334,13 @@ class MainViewModel(
             loginPending = false,
             loginForm = it.loginForm.copy(
               username = trimmedUsername,
-              password = if (form.rememberCredentials) form.password else ""
+              password = if (credentialsSaved) form.password else "",
+              rememberCredentials = credentialsSaved
             ),
-            message = StatusMessage(MessageTone.Success, "登录成功")
+            message = StatusMessage(
+              if (form.rememberCredentials && !credentialsSaved) MessageTone.Info else MessageTone.Success,
+              if (form.rememberCredentials && !credentialsSaved) "登录成功，但本机加密存储不可用，未保存账号密码" else "登录成功"
+            )
           )
         }
         loadMasterData()
@@ -382,10 +401,6 @@ class MainViewModel(
 
     return runCatching {
       repository.login(loginForm.serverUrl, username, loginForm.password)
-    }.onSuccess {
-      Log.i(logTag, "Auto login restored session for $username")
-    }.onFailure {
-      Log.w(logTag, "Auto login failed", it)
     }.getOrNull()
   }
 
@@ -774,13 +789,6 @@ class MainViewModel(
       if (normalizedForm != latestState.formState) {
         _uiState.update { it.copy(formState = normalizedForm) }
       }
-      if (operation == PdaOperation.TerminalInbound) {
-        Log.d(
-          logTag,
-          "submit terminal inbound productionDate='${normalizedForm.terminalProductionDate}', goodsId='${normalizedForm.terminalGoodsId}', storeId='${normalizedForm.terminalStoreId}', barcodes=${barcodes.joinToString()}"
-        )
-      }
-
       _uiState.update {
         it.copy(
           submitting = it.submitting + (operation to true),

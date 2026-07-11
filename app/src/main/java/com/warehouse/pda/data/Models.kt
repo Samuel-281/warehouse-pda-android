@@ -140,6 +140,14 @@ data class LogoutResult(
   val loggedOut: Boolean
 )
 
+data class HealthStatus(
+  val status: String,
+  val database: String,
+  val webVersion: String,
+  val apiContractVersion: String,
+  val serverTime: String
+)
+
 data class InboundSubmitRequest(
   val source: String,
   val warehouseId: String,

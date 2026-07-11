@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.JavaNetCookieJar
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
 import retrofit2.Retrofit
@@ -21,6 +22,7 @@ import java.net.CookiePolicy
 class WarehouseRepository(context: Context) {
   private val preferences = context.getSharedPreferences("warehouse_pda_config", Context.MODE_PRIVATE)
   private val gson = Gson()
+  private val credentialStore = SecureCredentialStore(preferences, gson)
   private val cookieManager = CookieManager().apply {
     setCookiePolicy(CookiePolicy.ACCEPT_ALL)
   }
@@ -28,7 +30,7 @@ class WarehouseRepository(context: Context) {
     .cookieJar(JavaNetCookieJar(cookieManager))
     .addInterceptor(
       HttpLoggingInterceptor().apply {
-        level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.BASIC
+        level = HttpLoggingInterceptor.Level.NONE
       }
     )
     .build()
@@ -56,25 +58,38 @@ class WarehouseRepository(context: Context) {
   }
 
   fun getSavedUsername(): String {
-    return preferences.getString("saved_username", "") ?: ""
+    return credentialStore.load()?.username.orEmpty()
   }
 
   fun getSavedPassword(): String {
-    return preferences.getString("saved_password", "") ?: ""
+    return credentialStore.load()?.password.orEmpty()
   }
 
-  fun saveCredentials(username: String, password: String) {
-    preferences.edit()
-      .putString("saved_username", username)
-      .putString("saved_password", password)
-      .apply()
+  fun saveCredentials(username: String, password: String): Boolean {
+    return credentialStore.save(SavedCredentials(username = username, password = password))
   }
 
   fun clearCredentials() {
-    preferences.edit()
-      .remove("saved_username")
-      .remove("saved_password")
-      .apply()
+    credentialStore.clear()
+  }
+
+  suspend fun checkHealth(serverUrl: String): HealthStatus = withContext(Dispatchers.IO) {
+    val normalized = normalizeBaseUrl(serverUrl)
+    val response = api(normalized).health()
+    val health = response.body()?.data
+    if (health == null) {
+      throw ApiRequestException(response.code(), parseError(response) ?: "无法读取服务器健康状态")
+    }
+    if (health.status != "ok" || health.database != "ok") {
+      throw ApiRequestException(response.code(), "服务器数据库暂不可用")
+    }
+    if (health.apiContractVersion != SUPPORTED_API_CONTRACT) {
+      throw ApiRequestException(
+        response.code(),
+        "服务器接口版本 ${health.apiContractVersion} 与当前 PDA 不兼容"
+      )
+    }
+    health
   }
 
   suspend fun getCurrentUser(serverUrl: String): CurrentUser = execute(serverUrl) { me() }
@@ -117,7 +132,7 @@ class WarehouseRepository(context: Context) {
     }
 
     val errorText = body?.error ?: parseError(response) ?: "请求失败"
-    throw IllegalStateException(errorText)
+    throw ApiRequestException(response.code(), errorText)
   }
 
   private fun api(serverUrl: String): WarehouseApi {
@@ -146,12 +161,30 @@ class WarehouseRepository(context: Context) {
 
   private fun normalizeBaseUrl(serverUrl: String): String {
     val trimmed = serverUrl.trim()
-    if (trimmed.isEmpty()) return BuildConfig.DEFAULT_SERVER_URL
-    return if (trimmed.endsWith("/")) trimmed else "$trimmed/"
+    val candidate = if (trimmed.isEmpty()) BuildConfig.DEFAULT_SERVER_URL else trimmed
+    val normalized = if (candidate.endsWith("/")) candidate else "$candidate/"
+    val parsed = normalized.toHttpUrlOrNull()
+      ?: throw IllegalArgumentException("服务器地址格式不正确")
+    if (parsed.scheme != "http" && parsed.scheme != "https") {
+      throw IllegalArgumentException("服务器地址仅支持 http 或 https")
+    }
+    return parsed.toString()
+  }
+
+  private companion object {
+    const val SUPPORTED_API_CONTRACT = "1"
   }
 }
 
+class ApiRequestException(
+  val statusCode: Int,
+  override val message: String
+) : IllegalStateException(message)
+
 private interface WarehouseApi {
+  @GET("api/health")
+  suspend fun health(): Response<ApiEnvelope<HealthStatus>>
+
   @POST("api/auth/login")
   suspend fun login(@Body body: LoginRequest): Response<ApiEnvelope<CurrentUser>>
 
