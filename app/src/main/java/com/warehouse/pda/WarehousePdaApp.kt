@@ -2,9 +2,12 @@ package com.warehouse.pda
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
+import android.speech.tts.TextToSpeech
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,10 +33,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.ArrowBack
@@ -70,6 +75,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -102,6 +108,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -113,7 +120,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.warehouse.pda.data.InventoryDetailResult
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.warehouse.pda.data.TrackingDetailResult
 import com.warehouse.pda.data.StorageLocation
 import com.warehouse.pda.data.WarehouseRecord
 import com.warehouse.pda.data.WarehouseState
@@ -125,7 +135,9 @@ import com.warehouse.pda.ui.theme.PdaPrimaryStrong
 import com.warehouse.pda.ui.theme.PdaSurface
 import com.warehouse.pda.ui.theme.PdaSurfaceVariant
 import com.warehouse.pda.ui.theme.WarehousePdaTheme
+import kotlinx.coroutines.delay
 import java.time.LocalDate
+import java.util.Locale
 
 private val BluePrimary = Color(0xFF0052CC)
 private val BlueSoft = Color(0xFFE8EDFF)
@@ -140,11 +152,55 @@ private val SuccessGreen = Color(0xFF16B37E)
 @Composable
 fun WarehousePdaRoot(viewModel: MainViewModel) {
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+  val lifecycleOwner = LocalLifecycleOwner.current
   val snackbarHostState = remember { SnackbarHostState() }
-  val toneGenerator = remember { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90) }
+  val context = LocalContext.current
+  val successToneGenerator = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 90) }
+  val errorToneGenerator = remember { ToneGenerator(AudioManager.STREAM_ALARM, 100) }
+  var speechEngine by remember { mutableStateOf<TextToSpeech?>(null) }
+  var speechReady by remember { mutableStateOf(false) }
+
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        viewModel.verifySession()
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
 
   DisposableEffect(Unit) {
-    onDispose { toneGenerator.release() }
+    onDispose {
+      successToneGenerator.release()
+      errorToneGenerator.release()
+    }
+  }
+
+  DisposableEffect(context) {
+    lateinit var engine: TextToSpeech
+    engine = TextToSpeech(context.applicationContext) { status ->
+      if (status == TextToSpeech.SUCCESS) {
+        val languageStatus = engine.setLanguage(Locale.SIMPLIFIED_CHINESE)
+        speechReady = languageStatus != TextToSpeech.LANG_MISSING_DATA &&
+          languageStatus != TextToSpeech.LANG_NOT_SUPPORTED
+        engine.setSpeechRate(1.05f)
+        engine.setPitch(1.0f)
+        engine.setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        )
+      }
+    }
+    speechEngine = engine
+    onDispose {
+      speechReady = false
+      speechEngine = null
+      engine.stop()
+      engine.shutdown()
+    }
   }
 
   LaunchedEffect(uiState.message) {
@@ -154,10 +210,46 @@ fun WarehousePdaRoot(viewModel: MainViewModel) {
   }
 
   LaunchedEffect(uiState.scanSoundCue?.id) {
-    when (uiState.scanSoundCue?.tone) {
-      ScanSoundTone.Success -> toneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 120)
-      ScanSoundTone.Error -> toneGenerator.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 180)
-      null -> Unit
+    val cue = uiState.scanSoundCue ?: return@LaunchedEffect
+    when (cue.tone) {
+      ScanSoundTone.Success -> {
+        successToneGenerator.startTone(ToneGenerator.TONE_PROP_ACK, 90)
+        delay(110)
+      }
+      ScanSoundTone.Error -> {
+        repeat(3) {
+          errorToneGenerator.startTone(ToneGenerator.TONE_SUP_ERROR, 180)
+          delay(230)
+        }
+      }
+    }
+
+    repeat(20) {
+      if (speechReady) return@repeat
+      delay(50)
+    }
+    if (speechReady) {
+      val fallback = if (cue.tone == ScanSoundTone.Error) "扫码错误" else null
+      (cue.announcement ?: fallback)?.let { announcement ->
+        speechEngine?.speak(
+          announcement,
+          TextToSpeech.QUEUE_FLUSH,
+          null,
+          "scan-feedback-${cue.id}"
+        )
+      }
+    }
+  }
+
+  val currentRoute = uiState.route
+  BackHandler(
+    enabled = currentRoute !is AppRoute.Login && currentRoute != AppRoute.Main(MainTab.Home)
+  ) {
+    when (currentRoute) {
+      is AppRoute.OperationScan -> viewModel.goBackFromOperation(currentRoute.operation, fromScan = true)
+      is AppRoute.OperationConfig -> viewModel.goBackFromOperation(currentRoute.operation, fromScan = false)
+      is AppRoute.Main -> viewModel.openTab(MainTab.Home)
+      AppRoute.Login -> Unit
     }
   }
 
@@ -238,21 +330,14 @@ private fun LoginScreen(uiState: AppUiState, viewModel: MainViewModel) {
       .padding(horizontal = 28.dp, vertical = 18.dp),
     contentAlignment = Alignment.Center
   ) {
-    IconButton(
-      onClick = { showServerDialog = true },
-      modifier = Modifier.align(Alignment.TopEnd)
-    ) {
-      Icon(
-        imageVector = Icons.Outlined.Settings,
-        contentDescription = "修改服务器",
-        tint = MutedText
-      )
-    }
-
     Column(
       modifier = Modifier
         .fillMaxWidth()
-        .widthIn(max = 420.dp),
+        .fillMaxHeight()
+        .widthIn(max = 420.dp)
+        .verticalScroll(rememberScrollState())
+        .padding(top = 52.dp, bottom = 12.dp),
+      verticalArrangement = Arrangement.Center,
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       Box(
@@ -271,14 +356,14 @@ private fun LoginScreen(uiState: AppUiState, viewModel: MainViewModel) {
 
       Spacer(modifier = Modifier.height(28.dp))
       Text(
-        "仓库管理系统",
+        "箱码流向追踪",
         style = MaterialTheme.typography.headlineLarge,
         fontWeight = FontWeight.Black,
         color = Color(0xFF172033)
       )
       Spacer(modifier = Modifier.height(10.dp))
       Text(
-        "欢迎登录仓库管理系统",
+        "欢迎登录箱码流向追踪系统",
         style = MaterialTheme.typography.headlineSmall,
         color = MutedText
       )
@@ -367,6 +452,19 @@ private fun LoginScreen(uiState: AppUiState, viewModel: MainViewModel) {
       }
     }
 
+    IconButton(
+      onClick = { showServerDialog = true },
+      modifier = Modifier
+        .align(Alignment.TopEnd)
+        .size(48.dp)
+    ) {
+      Icon(
+        imageVector = Icons.Outlined.Settings,
+        contentDescription = "修改服务器",
+        tint = MutedText
+      )
+    }
+
     if (showServerDialog) {
       AlertDialog(
         onDismissRequest = { showServerDialog = false },
@@ -375,7 +473,7 @@ private fun LoginScreen(uiState: AppUiState, viewModel: MainViewModel) {
         },
         text = {
           Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("修改后将用于后续登录和接口请求。", color = MutedText)
+            Text("输入后点击完成；登录成功后将保存该服务器。", color = MutedText)
             OutlinedTextField(
               value = uiState.loginForm.serverUrl,
               onValueChange = viewModel::updateServerUrl,
@@ -409,15 +507,15 @@ private fun MainSectionScreen(uiState: AppUiState, tab: MainTab, viewModel: Main
     MainTab.Home -> DashboardScreen(uiState, viewModel)
     MainTab.Query -> QueryScreen(uiState, viewModel)
     MainTab.Inbound -> OperationHubScreen(
-      title = "入库作业",
-      subtitle = "选择本次要执行的入库任务",
-      operations = PdaOperation.entries.filter { it.group == OperationGroup.Inbound },
+      title = "扫码回库",
+      subtitle = "未售货物和店铺退货统一回仓",
+      operations = listOf(PdaOperation.SalesReturn),
       accentColor = BluePrimary,
       viewModel = viewModel
     )
     MainTab.Outbound -> OperationHubScreen(
       title = "出库作业",
-      subtitle = "创建出库单并进入扫码作业",
+      subtitle = "混合箱码快速记录去向",
       operations = listOf(PdaOperation.DirectOutbound),
       accentColor = OrangeAccent,
       viewModel = viewModel
@@ -472,7 +570,7 @@ private fun DashboardScreen(uiState: AppUiState, viewModel: MainViewModel) {
       item {
         PdaHomeTaskCard(
           title = "扫码查询",
-          subtitle = "扫描条码快速定位库存归属",
+          subtitle = "查询当前归属、签收状态和完整履历",
           icon = Icons.Outlined.QrCodeScanner,
           accentColor = BluePrimary,
           tintColor = Color(0xFFF0F4FF),
@@ -481,8 +579,8 @@ private fun DashboardScreen(uiState: AppUiState, viewModel: MainViewModel) {
       }
       item {
         PdaHomeTaskCard(
-          title = "入库作业",
-          subtitle = "执行采购收货、退货入库",
+          title = "扫码回库",
+          subtitle = "未售货物与店铺退货统一回仓",
           icon = Icons.Outlined.Login,
           accentColor = BluePrimary,
           tintColor = Color(0xFFF0F4FF),
@@ -491,8 +589,8 @@ private fun DashboardScreen(uiState: AppUiState, viewModel: MainViewModel) {
       }
       item {
         PdaHomeTaskCard(
-          title = "出库作业",
-          subtitle = "订单拣货、打包发货与调拨",
+          title = "快速出库",
+          subtitle = "只扫箱码并记录销售人员或目标仓库",
           icon = Icons.Outlined.Logout,
           accentColor = OrangeAccent,
           tintColor = Color(0xFFFFF7F1),
@@ -549,18 +647,24 @@ private fun PendingSubmissionCard(
 private fun QueryScreen(uiState: AppUiState, viewModel: MainViewModel) {
   val masterData = uiState.masterData
   val result = uiState.queryForm.result
-  QueryPageShell(title = "扫码查询", subtitle = "扫描条码确认库存归属") {
+  val keyboardController = LocalSoftwareKeyboardController.current
+  val focusManager = LocalFocusManager.current
+  QueryPageShell(title = "条码查询", subtitle = "扫描条码确认流向与签收状态") {
     QueryCommandCard(
       value = uiState.queryForm.barcodeInput,
       onValueChange = viewModel::updateQueryInput,
       loading = uiState.queryForm.loading,
-      onSearch = { viewModel.queryBarcode(it) },
+      onSearch = {
+        keyboardController?.hide()
+        focusManager.clearFocus()
+        viewModel.queryBarcode(it)
+      },
       onClear = viewModel::clearQueryResult
     )
     if (uiState.queryForm.loading) {
       CenterLoadingCard("正在读取条码详情")
     } else if (result != null && masterData != null) {
-      InventoryResultCard(result, masterData)
+      TrackingResultCard(result, masterData)
     } else {
       QueryEmptyStateCard()
     }
@@ -690,41 +794,41 @@ private fun openExternalUrl(context: Context, url: String) {
 private fun OperationConfigScreen(uiState: AppUiState, operation: PdaOperation, viewModel: MainViewModel) {
   val masterData = uiState.masterData ?: return
   val form = uiState.formState
-  if (operation == PdaOperation.DirectOutbound) {
-    DirectOutboundOrderScreen(uiState = uiState, viewModel = viewModel)
-    return
-  }
-
+  val contextLocked = uiState.barcodeLists[operation].orEmpty().isNotEmpty()
+  val actionColor = if (operation == PdaOperation.DirectOutbound) OrangeAccent else BluePrimary
   OperationPageShell(
-    title = "仓库管理系统",
+    title = "箱码流向追踪",
     onBack = { viewModel.goBackFromOperation(operation, fromScan = false) },
     trailing = {}
   ) {
     Text(operation.title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
-    if (operation != PdaOperation.DirectOutbound) {
-      Text(
-        when (operation) {
-          PdaOperation.FactoryInbound -> "请选择作业参数并填写入库数量。"
-          else -> "请选择作业参数并确认目标仓库，准备扫码。"
-        },
-        color = MutedText
-      )
-    }
+    Text(
+      when (operation) {
+        PdaOperation.FactoryInbound -> "请选择作业参数并填写入库数量。"
+        PdaOperation.DirectOutbound -> "选择来源仓库与去向后，连续扫描混合箱码。"
+        else -> "选择回库仓库后，连续扫描需要回仓的箱码。"
+      },
+      color = MutedText
+    )
     OperationFields(
       operation = operation,
       form = form,
       masterData = masterData,
       operatorName = uiState.currentUser?.displayName.orEmpty(),
-      contextLocked = uiState.barcodeLists[operation].orEmpty().isNotEmpty(),
+      contextLocked = contextLocked,
       onUpdate = viewModel::updateForm
     )
+    if (contextLocked) {
+      StatusBanner("当前已有已扫条码，作业参数已锁定。清空条码后可以重新选择。", MessageTone.Info)
+    }
     Button(
       onClick = { if (operation == PdaOperation.FactoryInbound) viewModel.submit(operation) else viewModel.startScanning(operation) },
       enabled = uiState.submitting[operation] != true,
       modifier = Modifier
         .fillMaxWidth()
-        .padding(top = 8.dp),
-      colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+        .height(58.dp)
+        .padding(top = 2.dp),
+      colors = ButtonDefaults.buttonColors(containerColor = actionColor),
       shape = RoundedCornerShape(16.dp)
     ) {
       if (uiState.submitting[operation] == true) {
@@ -737,18 +841,17 @@ private fun OperationConfigScreen(uiState: AppUiState, operation: PdaOperation, 
           else -> Icons.Outlined.QrCodeScanner
         },
         contentDescription = null,
-        tint = Color.White
-      )
-      Spacer(modifier = Modifier.size(8.dp))
-      Text(
-        when (operation) {
-          PdaOperation.FactoryInbound -> "确认入库"
-          PdaOperation.DirectOutbound -> "填写货品明细"
-          else -> "开始扫码"
-        },
-        color = Color.White,
-        fontWeight = FontWeight.Black
-      )
+          tint = Color.White
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+          when (operation) {
+            PdaOperation.FactoryInbound -> "确认入库"
+            else -> if (contextLocked) "继续扫码" else "开始扫码"
+          },
+          color = Color.White,
+          fontWeight = FontWeight.Black
+        )
       }
     }
   }
@@ -890,10 +993,6 @@ private fun DirectOutboundOrderScreen(uiState: AppUiState, viewModel: MainViewMo
 
 @Composable
 private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, viewModel: MainViewModel) {
-  if (operation == PdaOperation.DirectOutbound) {
-    DirectOutboundScanScreen(uiState = uiState, viewModel = viewModel)
-    return
-  }
   if (operation == PdaOperation.FactoryInbound) {
     LaunchedEffect(operation) {
       viewModel.goBackFromOperation(operation, fromScan = true)
@@ -909,6 +1008,10 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
   val barcodeReviews = uiState.barcodeReviews[operation].orEmpty()
   val invalidCount = barcodeList.count { code -> barcodeReviews[code]?.isValid == false }
   val pendingCount = barcodeList.count { code -> barcodeReviews[code] == null }
+  val validCount = barcodeList.size - invalidCount - pendingCount
+  val remainingCount = (MainViewModel.MAX_BARCODES_PER_SUBMISSION - barcodeList.size).coerceAtLeast(0)
+  val actionColor = if (operation == PdaOperation.DirectOutbound) OrangeAccent else BluePrimary
+  var showClearDialog by remember { mutableStateOf(false) }
 
   Scaffold(
     containerColor = AppSurface,
@@ -927,19 +1030,23 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
           .navigationBarsPadding()
           .padding(horizontal = 18.dp, vertical = 14.dp)
           .height(56.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+        colors = ButtonDefaults.buttonColors(containerColor = actionColor),
         shape = RoundedCornerShape(14.dp)
       ) {
         if (uiState.submitting[operation] == true) {
           CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
         } else {
-          Text("确认${submitLabel(operation)} (${barcodeList.size})", color = Color.White, fontWeight = FontWeight.Black)
+          Text(
+            if (pendingCount > 0) "校验中 $pendingCount 条" else "提交${submitLabel(operation)} ($validCount)",
+            color = Color.White,
+            fontWeight = FontWeight.Black
+          )
         }
       }
     }
   ) { innerPadding ->
     OperationPageShell(
-      title = "仓库管理系统",
+      title = "箱码流向追踪",
       onBack = { viewModel.goBackFromOperation(operation, fromScan = true) },
       modifier = Modifier.padding(innerPadding),
       trailing = {
@@ -950,7 +1057,7 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
       ScanStatusCard(
         countLabel = "已扫",
         countValue = barcodeList.size.toString(),
-        subtitle = "请直接使用扫码头录入，或在下方输入条码。"
+        subtitle = "可再添加 $remainingCount 条 · 单次最多 ${MainViewModel.MAX_BARCODES_PER_SUBMISSION} 条"
       )
       ScanInputRow(
         value = barcodeInput,
@@ -961,9 +1068,33 @@ private fun OperationScanScreen(uiState: AppUiState, operation: PdaOperation, vi
       ScanListCard(
         barcodeList = barcodeList,
         barcodeReviews = barcodeReviews,
+        onClear = { showClearDialog = true },
         onRemove = { viewModel.removeBarcode(operation, it) }
       )
     }
+  }
+
+  if (showClearDialog) {
+    AlertDialog(
+      onDismissRequest = { showClearDialog = false },
+      title = { Text("清空全部条码？", fontWeight = FontWeight.Black) },
+      text = { Text("将移除当前作业已扫描的 ${barcodeList.size} 个条码，作业参数随后可以重新选择。") },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            showClearDialog = false
+            viewModel.clearBarcodes(operation)
+          }
+        ) {
+          Text("确认清空", color = DangerRed, fontWeight = FontWeight.Bold)
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { showClearDialog = false }) {
+          Text("取消")
+        }
+      }
+    )
   }
 }
 
@@ -1844,7 +1975,7 @@ private fun OutboundScanRecordCard(
 @Composable
 private fun PdaTopBrandBar() {
   Text(
-    "仓库管理系统",
+    "箱码流向追踪",
     color = PdaPrimaryStrong,
     style = MaterialTheme.typography.headlineMedium,
     fontWeight = FontWeight.Black,
@@ -1991,27 +2122,28 @@ private fun PdaHomeTaskCard(
         modifier = Modifier
           .fillMaxSize()
           .padding(horizontal = 26.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(26.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(26.dp), verticalAlignment = Alignment.CenterVertically) {
-          Box(
-            modifier = Modifier
-              .size(72.dp)
-              .background(accentColor, RoundedCornerShape(14.dp)),
-            contentAlignment = Alignment.Center
-          ) {
-            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(40.dp))
-          }
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, color = PdaOnSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-            Text(
-              subtitle,
-              color = PdaOnSurfaceVariant,
-              style = MaterialTheme.typography.bodyMedium,
-              maxLines = 1
-            )
-          }
+        Box(
+          modifier = Modifier
+            .size(72.dp)
+            .background(accentColor, RoundedCornerShape(14.dp)),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(40.dp))
+        }
+        Column(
+          modifier = Modifier.weight(1f),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Text(title, color = PdaOnSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+          Text(
+            subtitle,
+            color = PdaOnSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2
+          )
         }
         Text("›", color = Color(0xFF6E7280), style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Black)
       }
@@ -2032,8 +2164,8 @@ private fun MainBottomBar(currentTab: MainTab, onSelect: (MainTab) -> Unit) {
   ) {
     val items = listOf(
       Triple(MainTab.Home, "首页", Icons.Outlined.Home),
-      Triple(MainTab.Query, "扫描", Icons.Outlined.QrCodeScanner),
-      Triple(MainTab.Inbound, "入库", Icons.Outlined.Login),
+      Triple(MainTab.Query, "查询", Icons.Outlined.QrCodeScanner),
+      Triple(MainTab.Inbound, "回库", Icons.Outlined.Login),
       Triple(MainTab.Outbound, "出库", Icons.Outlined.Logout),
       Triple(MainTab.Profile, "我的", Icons.Outlined.AccountCircle)
     )
@@ -2473,7 +2605,7 @@ private fun OperationFields(
     PdaOperation.DirectOutbound -> {
       ConfigSectionCard("出库信息") {
         KeyValueRow("操作人员", operatorName.ifBlank { "-" })
-        DropdownField("出库仓库", form.directSourceWarehouseId, warehouses.map { it.id to it.name }) { selected ->
+        DropdownField("出库仓库", form.directSourceWarehouseId, warehouses.map { it.id to it.name }, enabled = !contextLocked) { selected ->
           onUpdate { current: OperationFormState ->
             val target = warehouses.firstOrNull { record -> record.id != selected }?.id.orEmpty()
             current.copy(
@@ -2489,12 +2621,13 @@ private fun OperationFields(
         DropdownField(
           "出库去向",
           form.directDestinationType,
-          listOf("sales" to "分配销售人员", "warehouse" to "发往目标仓库")
+          listOf("sales" to "分配销售人员", "warehouse" to "发往目标仓库"),
+          enabled = !contextLocked
         ) { selected ->
           onUpdate { current: OperationFormState -> current.copy(directDestinationType = selected) }
         }
         if (form.directDestinationType == "warehouse") {
-          DropdownField("目标仓库", form.directTargetWarehouseId, warehouses.filter { it.id != form.directSourceWarehouseId }.map { it.id to it.name }) { selected ->
+          DropdownField("目标仓库", form.directTargetWarehouseId, warehouses.filter { it.id != form.directSourceWarehouseId }.map { it.id to it.name }, enabled = !contextLocked) { selected ->
             onUpdate { current: OperationFormState ->
               current.copy(
                 directTargetWarehouseId = selected,
@@ -2502,11 +2635,8 @@ private fun OperationFields(
               )
             }
           }
-          DropdownField("目标库位", form.directTargetLocationId, locations.filter { it.warehouseId == form.directTargetWarehouseId }.map { it.id to it.name }) { selected ->
-            onUpdate { current: OperationFormState -> current.copy(directTargetLocationId = selected) }
-          }
         } else {
-          DropdownField("销售人员", form.directSalespersonId, salespeople.map { it.id to "${it.name} (${it.code})" }) { selected ->
+          DropdownField("销售人员", form.directSalespersonId, salespeople.map { it.id to "${it.name} (${it.code})" }, enabled = !contextLocked) { selected ->
             onUpdate { current: OperationFormState -> current.copy(directSalespersonId = selected) }
           }
         }
@@ -2514,8 +2644,8 @@ private fun OperationFields(
     }
 
     PdaOperation.SalesReturn -> {
-      ConfigSectionCard("2. 回流仓库配置") {
-        DropdownField("回流仓库", form.returnWarehouseId, warehouses.map { it.id to it.name }) { selected ->
+      ConfigSectionCard("回库信息") {
+        DropdownField("回库仓库", form.returnWarehouseId, warehouses.map { it.id to it.name }, enabled = !contextLocked) { selected ->
           onUpdate { current: OperationFormState ->
             current.copy(
               returnWarehouseId = selected,
@@ -2523,9 +2653,7 @@ private fun OperationFields(
             )
           }
         }
-        DropdownField("回流库位", form.returnLocationId, locations.filter { it.warehouseId == form.returnWarehouseId }.map { it.id to it.name }) { selected ->
-          onUpdate { current: OperationFormState -> current.copy(returnLocationId = selected) }
-        }
+        StatusBanner("不区分销售退回或店铺退货，也不要求商品和生产日期。", MessageTone.Info)
       }
     }
   }
@@ -2556,8 +2684,7 @@ private fun ContextStrip(operation: PdaOperation, form: OperationFormState, mast
     )
     PdaOperation.SalesReturn -> listOf(
       operation.title,
-      warehouseName(warehouses, form.returnWarehouseId),
-      locationName(locations, form.returnLocationId)
+      warehouseName(warehouses, form.returnWarehouseId)
     )
   }.filter { it.isNotBlank() }
 
@@ -2872,17 +2999,31 @@ private fun handleScannerTextChange(
 private fun ScanListCard(
   barcodeList: List<String>,
   barcodeReviews: Map<String, ReviewState>,
+  onClear: () -> Unit,
   onRemove: (String) -> Unit
 ) {
   Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
     Column {
-      Column(modifier = Modifier.padding(18.dp)) {
-        Text("已扫描明细", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-          "通过 ${barcodeList.count { barcodeReviews[it]?.isValid == true }} 条，校验中 ${barcodeList.count { barcodeReviews[it] == null }} 条，异常 ${barcodeList.count { barcodeReviews[it]?.isValid == false }} 条",
-          color = MutedText
-        )
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text("已扫描明细", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            "可提交 ${barcodeList.count { barcodeReviews[it]?.isValid == true }} · 校验中 ${barcodeList.count { barcodeReviews[it] == null }} · 异常 ${barcodeList.count { barcodeReviews[it]?.isValid == false }}",
+            color = MutedText
+          )
+        }
+        if (barcodeList.isNotEmpty()) {
+          TextButton(onClick = onClear) {
+            Icon(Icons.Outlined.Delete, contentDescription = null, tint = DangerRed, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.size(4.dp))
+            Text("清空", color = DangerRed, fontWeight = FontWeight.Bold)
+          }
+        }
       }
       Box(
         modifier = Modifier
@@ -2994,10 +3135,24 @@ private fun ScanRow(
 }
 
 @Composable
-private fun InventoryResultCard(result: InventoryDetailResult, masterData: WarehouseState) {
+private fun TrackingResultCard(result: TrackingDetailResult, masterData: WarehouseState) {
   val item = result.item
-  val isInStock = item.status == "in_stock"
-  val ownerTitle = ownerTitle(item, masterData)
+  val ownerTitle = when (item.currentOwnerType) {
+    "warehouse" -> masterData.warehouses.firstOrNull { it.id == item.warehouseId }?.name ?: "仓库"
+    "salesperson" -> masterData.salespeople.firstOrNull { it.id == item.salespersonId }?.name ?: "销售人员"
+    "terminal_store" -> item.terminalStoreName ?: "终端店铺"
+    else -> "未知归属"
+  }
+  val receiptLabel = when (item.receiptStatus) {
+    "signed" -> "已签收"
+    "exception" -> "签收异常"
+    else -> "待签收"
+  }
+  val receiptColor = when (item.receiptStatus) {
+    "signed" -> SuccessGreen
+    "exception" -> DangerRed
+    else -> OrangeAccent
+  }
   Card(shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
     Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
       Row(
@@ -3016,9 +3171,9 @@ private fun InventoryResultCard(result: InventoryDetailResult, masterData: Wareh
           Text(ownerTitle, color = MutedText)
         }
         StatusChip(
-          if (isInStock) "库存中" else "随销售",
-          if (isInStock) Color(0xFFE8FBF3) else Color(0xFFFFF2E5),
-          if (isInStock) SuccessGreen else OrangeAccent
+          receiptLabel,
+          receiptColor.copy(alpha = 0.12f),
+          receiptColor
         )
       }
 
@@ -3029,11 +3184,12 @@ private fun InventoryResultCard(result: InventoryDetailResult, masterData: Wareh
           .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
-        QueryInfoRow("货品", goodsName(masterData.goods, item.goodsId).ifBlank { compactCode(item.goodsId) })
+        QueryInfoRow("商品", item.externalGoodsName ?: "等待勤策签收回填")
+        QueryInfoRow("单位", item.goodsUnit ?: "-")
         QueryInfoRow("当前归属", ownerTitle)
-        QueryInfoRow("生产日期", item.productionDate ?: "-")
-        QueryInfoRow("保质期", item.shelfLifeDate ?: "-")
-        QueryInfoRow("条码来源", inboundSourceLabel(item.inboundSource))
+        QueryInfoRow("签收状态", receiptLabel)
+        QueryInfoRow("签收时间", item.signedAt ?: "-")
+        QueryInfoRow("最近变动", item.lastMovedAt)
       }
 
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3045,14 +3201,36 @@ private fun InventoryResultCard(result: InventoryDetailResult, masterData: Wareh
         ) {
           Icon(Icons.Outlined.CallSplit, contentDescription = null, tint = BluePrimary, modifier = Modifier.size(18.dp))
         }
-        Text("最近流转", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color(0xFF151B2D))
+        Text("流转履历 · ${result.movements.size}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black, color = Color(0xFF151B2D))
       }
 
       if (result.movements.isEmpty()) {
         Text("暂无流转记录", color = MutedText)
       } else {
-        result.movements.take(4).forEach { movement ->
+        result.movements.forEach { movement ->
           MovementTimelineItem(movement)
+        }
+      }
+
+      if (result.terminalReceipts.isNotEmpty()) {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF7F8FE), RoundedCornerShape(20.dp))
+            .padding(14.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+          Text("勤策签收记录 · ${result.terminalReceipts.size}", fontWeight = FontWeight.Black, color = Color(0xFF151B2D))
+          result.terminalReceipts.forEachIndexed { index, receipt ->
+            if (index > 0) {
+              HorizontalDivider(color = CardBorder)
+            }
+            Text(receipt.receivingOrganizationName, fontWeight = FontWeight.Bold, color = Color(0xFF1D2438))
+            QueryInfoRow("勤策商品", receipt.externalGoodsName)
+            QueryInfoRow("扫码人", receipt.scannerName)
+            QueryInfoRow("扫码时间", receipt.scannedAt)
+            QueryInfoRow("单位", receipt.goodsUnit)
+          }
         }
       }
     }
@@ -3078,7 +3256,7 @@ private fun QueryInfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun MovementTimelineItem(movement: com.warehouse.pda.data.StockMovement) {
+private fun MovementTimelineItem(movement: com.warehouse.pda.data.TrackingMovement) {
   Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
       Box(
@@ -3444,7 +3622,7 @@ private fun submitLabel(operation: PdaOperation): String {
     PdaOperation.FactoryInbound,
     PdaOperation.TerminalInbound -> "入库"
     PdaOperation.DirectOutbound -> "出库"
-    PdaOperation.SalesReturn -> "回流"
+    PdaOperation.SalesReturn -> "回库"
   }
 }
 

@@ -7,19 +7,21 @@ import com.warehouse.pda.data.BarcodeValidationRequest
 import com.warehouse.pda.data.BarcodeValidationResult
 import com.warehouse.pda.data.CurrentUser
 import com.warehouse.pda.data.InboundSubmitRequest
-import com.warehouse.pda.data.InventoryDetailResult
 import com.warehouse.pda.data.OutboundLineSubmitRequest
 import com.warehouse.pda.data.OutboundSubmitRequest
 import com.warehouse.pda.data.PendingSubmission
 import com.warehouse.pda.data.PdaReleaseInfo
-import com.warehouse.pda.data.SalesReturnSubmitRequest
 import com.warehouse.pda.data.StorageLocation
 import com.warehouse.pda.data.SubmissionPolicy
-import com.warehouse.pda.data.SubmitResult
+import com.warehouse.pda.data.SubmissionReceipt
+import com.warehouse.pda.data.TrackingDetailResult
+import com.warehouse.pda.data.TrackingOutboundSubmitRequest
+import com.warehouse.pda.data.TrackingReturnSubmitRequest
+import com.warehouse.pda.data.TrackingValidationRequest
 import com.warehouse.pda.data.WarehouseRepository
 import com.warehouse.pda.data.WarehouseState
-import com.warehouse.pda.data.ApiRequestException
 import com.warehouse.pda.data.shouldRetainPendingSubmission
+import com.warehouse.pda.data.isSessionExpired
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,14 +44,14 @@ enum class PdaOperation(
 ) {
   FactoryInbound("厂家到货", "按货品数量完成厂家到货入库", OperationGroup.Inbound),
   TerminalInbound("终端退换货", "登记生产日期并扫码回仓", OperationGroup.Inbound),
-  SalesReturn("销售退回", "将销售人员名下条码回流仓库", OperationGroup.Inbound),
-  DirectOutbound("扫码出库", "多货品连续扫码", OperationGroup.Outbound)
+  SalesReturn("扫码回库", "未售货物与店铺退货统一扫码回仓", OperationGroup.Inbound),
+  DirectOutbound("快速出库", "混合箱码连续扫描，无需选择商品", OperationGroup.Outbound)
 }
 
 enum class MainTab(val title: String) {
   Home("首页"),
-  Query("扫描"),
-  Inbound("入库"),
+  Query("查询"),
+  Inbound("回库"),
   Outbound("出库"),
   Profile("我的")
 }
@@ -99,7 +101,7 @@ data class OutboundLineState(
 data class QueryFormState(
   val barcodeInput: String = "",
   val loading: Boolean = false,
-  val result: InventoryDetailResult? = null,
+  val result: TrackingDetailResult? = null,
   val resultBarcode: String = ""
 )
 
@@ -127,7 +129,8 @@ enum class ScanSoundTone {
 
 data class ScanSoundCue(
   val id: String = UUID.randomUUID().toString(),
-  val tone: ScanSoundTone
+  val tone: ScanSoundTone,
+  val announcement: String? = null
 )
 
 data class RecentActivity(
@@ -179,6 +182,7 @@ class MainViewModel(
   private val repository: WarehouseRepository
 ) : ViewModel() {
   private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+  private var sessionCheckInProgress = false
 
   private val _uiState = MutableStateFlow(
     AppUiState(
@@ -189,7 +193,59 @@ class MainViewModel(
   val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
 
   init {
+    observeSessionExpiration()
     bootstrap()
+  }
+
+  private fun observeSessionExpiration() {
+    viewModelScope.launch {
+      repository.sessionExpiredEvents.collect {
+        expireSession()
+      }
+    }
+  }
+
+  fun verifySession() {
+    val state = _uiState.value
+    if (state.booting || state.currentUser == null || sessionCheckInProgress) return
+
+    sessionCheckInProgress = true
+    viewModelScope.launch {
+      runCatching {
+        repository.getCurrentUser(_uiState.value.loginForm.serverUrl)
+      }.onFailure { error ->
+        if (isSessionExpired(error)) expireSession()
+      }
+      sessionCheckInProgress = false
+    }
+  }
+
+  private fun expireSession() {
+    _uiState.update { state ->
+      if (state.currentUser == null && state.route == AppRoute.Login) return@update state
+
+      val pending = state.pendingSubmission ?: repository.getPendingSubmission()
+      val hasScannedBarcodes = state.barcodeLists.values.any { it.isNotEmpty() } ||
+        state.outboundLines.any { it.barcodes.isNotEmpty() }
+      val message = when {
+        pending != null -> "登录已失效，请重新登录；结果待确认业务已保留"
+        hasScannedBarcodes -> "登录已失效，请重新登录；当前已扫条码已保留"
+        else -> "登录已失效，请重新登录"
+      }
+
+      state.copy(
+        route = AppRoute.Login,
+        currentUser = null,
+        loginPending = false,
+        loadingMasterData = false,
+        submitting = PdaOperation.entries.associateWith { false },
+        pendingSubmission = pending,
+        pendingSubmissionRetrying = false,
+        queryForm = state.queryForm.copy(loading = false),
+        appUpdateState = state.appUpdateState.copy(checking = false),
+        message = StatusMessage(MessageTone.Info, message)
+      )
+    }
   }
 
   fun bootstrap() {
@@ -293,6 +349,10 @@ class MainViewModel(
           _uiState.update { it.copy(message = StatusMessage(MessageTone.Info, text)) }
         }
       }.onFailure { error ->
+        if (isSessionExpired(error)) {
+          expireSession()
+          return@onFailure
+        }
         _uiState.update {
           it.copy(
             appUpdateState = it.appUpdateState.copy(checking = false),
@@ -346,6 +406,7 @@ class MainViewModel(
           )
         }
         loadMasterData()
+        resumePendingBarcodeValidations()
       }.onFailure { error ->
         _uiState.update {
           it.copy(
@@ -408,7 +469,11 @@ class MainViewModel(
   }
 
   fun openTab(tab: MainTab) {
-    _uiState.update { it.copy(route = AppRoute.Main(tab), message = null) }
+    when (tab) {
+      MainTab.Inbound -> openOperation(PdaOperation.SalesReturn)
+      MainTab.Outbound -> openOperation(PdaOperation.DirectOutbound)
+      else -> _uiState.update { it.copy(route = AppRoute.Main(tab), message = null) }
+    }
   }
 
   fun openOperation(operation: PdaOperation) {
@@ -430,16 +495,13 @@ class MainViewModel(
       return
     }
 
-    _uiState.update { state ->
-      if (operation == PdaOperation.DirectOutbound) {
-        state.copy(
-          route = AppRoute.OperationScan(operation),
-          message = null
-        )
-      } else {
-        state.copy(route = AppRoute.OperationScan(operation), message = null)
-      }
+    val contextError = trackingContextError(operation, _uiState.value.formState)
+    if (contextError != null) {
+      _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, contextError)) }
+      return
     }
+
+    _uiState.update { state -> state.copy(route = AppRoute.OperationScan(operation), message = null) }
   }
 
   fun goBackFromOperation(operation: PdaOperation, fromScan: Boolean) {
@@ -475,13 +537,17 @@ class MainViewModel(
     _uiState.update { state ->
       val next = transform(state.formState).normalized()
       val terminalLocked = state.barcodeLists[PdaOperation.TerminalInbound].orEmpty().isNotEmpty()
-      val outboundLocked = state.outboundLines.any { it.barcodes.isNotEmpty() }
+      val outboundLocked = state.barcodeLists[PdaOperation.DirectOutbound].orEmpty().isNotEmpty()
+      val returnLocked = state.barcodeLists[PdaOperation.SalesReturn].orEmpty().isNotEmpty()
       when {
         terminalLocked && next.terminalGoodsId != state.formState.terminalGoodsId -> state.copy(
           message = StatusMessage(MessageTone.Info, "已扫码后不能更换货物，请先清空条码清单")
         )
-        outboundLocked && next.directSourceWarehouseId != state.formState.directSourceWarehouseId -> state.copy(
-          message = StatusMessage(MessageTone.Info, "已扫码后不能更换出库仓库，请先清空所有货品条码")
+        outboundLocked && next.outboundContext() != state.formState.outboundContext() -> state.copy(
+          message = StatusMessage(MessageTone.Info, "已扫码后不能更换出库仓库或去向，请先清空条码清单")
+        )
+        returnLocked && next.returnWarehouseId != state.formState.returnWarehouseId -> state.copy(
+          message = StatusMessage(MessageTone.Info, "已扫码后不能更换回库仓库，请先清空条码清单")
         )
         else -> state.copy(formState = next)
       }
@@ -490,6 +556,13 @@ class MainViewModel(
 
   fun selectWorkWarehouse(warehouseId: String) {
     _uiState.update { state ->
+      val hasUnfinishedScan = state.barcodeLists[PdaOperation.DirectOutbound].orEmpty().isNotEmpty() ||
+        state.barcodeLists[PdaOperation.SalesReturn].orEmpty().isNotEmpty()
+      if (hasUnfinishedScan) {
+        return@update state.copy(
+          message = StatusMessage(MessageTone.Info, "当前有未提交的扫码作业，请先继续处理或清空条码")
+        )
+      }
       val masterData = state.masterData ?: return@update state
       val selectedWarehouseId = existingWorkWarehouseId(masterData, warehouseId)
       if (selectedWarehouseId.isBlank()) {
@@ -504,8 +577,17 @@ class MainViewModel(
   }
 
   fun addBarcodes(operation: PdaOperation, rawInput: String? = null) {
-    if (operation == PdaOperation.DirectOutbound) {
-      addOutboundBarcodes(rawInput)
+    val contextError = trackingContextError(operation, _uiState.value.formState)
+    if (contextError != null) {
+      _uiState.update {
+        it.copy(
+          message = StatusMessage(MessageTone.Error, contextError),
+          scanSoundCue = ScanSoundCue(
+            tone = ScanSoundTone.Error,
+            announcement = "扫码错误，$contextError"
+          )
+        )
+      }
       return
     }
 
@@ -517,9 +599,14 @@ class MainViewModel(
     val fresh = candidates.filterNot(existing::contains)
     if (fresh.isEmpty()) {
       _uiState.update {
+        val validCount = it.validBarcodeCount(operation)
         it.copy(
+          barcodeInputs = it.barcodeInputs + (operation to ""),
           message = StatusMessage(MessageTone.Info, "这些条码已在当前清单中"),
-          scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
+          scanSoundCue = ScanSoundCue(
+            tone = ScanSoundTone.Error,
+            announcement = "重复扫码，当前有效 $validCount 件"
+          )
         )
       }
       return
@@ -528,9 +615,13 @@ class MainViewModel(
     val remainingCapacity = SubmissionPolicy.remainingCapacity(existing.size)
     if (!SubmissionPolicy.accepts(existing.size, fresh.size)) {
       _uiState.update {
+        val validCount = it.validBarcodeCount(operation)
         it.copy(
           message = StatusMessage(MessageTone.Error, "单次最多 $MAX_BARCODES_PER_SUBMISSION 个条码，当前还可添加 $remainingCapacity 个"),
-          scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
+          scanSoundCue = ScanSoundCue(
+            tone = ScanSoundTone.Error,
+            announcement = "已达到单次扫码上限，当前有效 $validCount 件"
+          )
         )
       }
       return
@@ -548,14 +639,36 @@ class MainViewModel(
       )
     }
 
-    val validationRequest = buildValidationRequest(operation, _uiState.value.formState, fresh)
+    validateBarcodesForOperation(operation, _uiState.value.formState, fresh, validationToken)
+  }
+
+  private fun validateBarcodesForOperation(
+    operation: PdaOperation,
+    formState: OperationFormState,
+    barcodes: List<String>,
+    validationToken: String
+  ) {
     viewModelScope.launch {
       runCatching {
-        repository.validateBarcodes(_uiState.value.loginForm.serverUrl, validationRequest)
+        if (operation == PdaOperation.DirectOutbound || operation == PdaOperation.SalesReturn) {
+          repository.validateTrackingBarcodes(
+            _uiState.value.loginForm.serverUrl,
+            buildTrackingValidationRequest(operation, formState, barcodes)
+          )
+        } else {
+          repository.validateBarcodes(
+            _uiState.value.loginForm.serverUrl,
+            buildValidationRequest(operation, formState, barcodes)
+          )
+        }
       }.onSuccess { results ->
         mergeValidationResults(operation, validationToken, results)
       }.onFailure { error ->
-        val failureReviews = fresh.associateWith {
+        if (isSessionExpired(error)) {
+          expireSession()
+          return@onFailure
+        }
+        val failureReviews = barcodes.associateWith {
           ReviewState(
             label = "校验失败",
             detail = error.message ?: "条码校验失败",
@@ -569,13 +682,40 @@ class MainViewModel(
             barcode in currentBarcodes && currentTokens[barcode] == validationToken
           }
           val merged = it.barcodeReviews[operation].orEmpty() + applicable
+          val validCount = currentBarcodes.count { barcode -> merged[barcode]?.isValid == true }
           it.copy(
             barcodeReviews = it.barcodeReviews + (operation to merged),
             message = StatusMessage(MessageTone.Error, error.message ?: "条码校验失败"),
-            scanSoundCue = ScanSoundCue(tone = ScanSoundTone.Error)
+            scanSoundCue = ScanSoundCue(
+              tone = ScanSoundTone.Error,
+              announcement = "扫码校验失败，当前有效 $validCount 件"
+            )
           )
         }
       }
+    }
+  }
+
+  private fun resumePendingBarcodeValidations() {
+    PdaOperation.entries.forEach { operation ->
+      if (operation == PdaOperation.FactoryInbound) return@forEach
+
+      val state = _uiState.value
+      val pendingBarcodes = state.barcodeLists[operation].orEmpty().filter { barcode ->
+        state.barcodeReviews[operation].orEmpty()[barcode] == null
+      }
+      if (pendingBarcodes.isEmpty()) return@forEach
+      if (trackingContextError(operation, state.formState) != null) return@forEach
+
+      val validationToken = UUID.randomUUID().toString()
+      _uiState.update {
+        it.copy(
+          barcodeValidationTokens = it.barcodeValidationTokens + (
+            operation to (it.barcodeValidationTokens[operation].orEmpty() + pendingBarcodes.associateWith { validationToken })
+          )
+        )
+      }
+      validateBarcodesForOperation(operation, state.formState, pendingBarcodes, validationToken)
     }
   }
 
@@ -699,6 +839,10 @@ class MainViewModel(
       }.onSuccess { results ->
         mergeOutboundValidationResults(selectedGoodsId, validationToken, results)
       }.onFailure { error ->
+        if (isSessionExpired(error)) {
+          expireSession()
+          return@onFailure
+        }
         val failureReviews = fresh.associateWith {
           ReviewState(
             label = "校验失败",
@@ -726,11 +870,6 @@ class MainViewModel(
   }
 
   fun removeBarcode(operation: PdaOperation, barcode: String) {
-    if (operation == PdaOperation.DirectOutbound) {
-      removeOutboundBarcode(barcode)
-      return
-    }
-
     _uiState.update {
       val nextList = it.barcodeLists[operation].orEmpty().filterNot { item -> item == barcode }
       val nextReviews = it.barcodeReviews[operation].orEmpty().toMutableMap().also { map -> map.remove(barcode) }
@@ -744,20 +883,6 @@ class MainViewModel(
   }
 
   fun clearBarcodes(operation: PdaOperation) {
-    if (operation == PdaOperation.DirectOutbound) {
-      _uiState.update {
-        it.copy(
-          outboundLines = it.outboundLines.map { line ->
-            if (line.goodsId == it.selectedOutboundGoodsId) {
-              line.copy(barcodes = emptyList(), reviews = emptyMap(), validationTokens = emptyMap())
-            } else line
-          },
-          barcodeInputs = it.barcodeInputs + (operation to "")
-        )
-      }
-      return
-    }
-
     _uiState.update {
       it.copy(
         barcodeLists = it.barcodeLists + (operation to emptyList()),
@@ -795,7 +920,7 @@ class MainViewModel(
     viewModelScope.launch {
       _uiState.update { it.copy(queryForm = it.queryForm.copy(loading = true, result = null, resultBarcode = barcode)) }
       runCatching {
-        repository.getInventoryDetail(_uiState.value.loginForm.serverUrl, barcode)
+        repository.getTrackingDetail(_uiState.value.loginForm.serverUrl, barcode)
       }.onSuccess { result ->
         _uiState.update {
           it.copy(
@@ -805,7 +930,7 @@ class MainViewModel(
               RecentActivity(
                 id = UUID.randomUUID().toString(),
                 title = "扫码查询 $barcode",
-                subtitle = describeInventoryResult(result),
+                subtitle = describeTrackingResult(result),
                 timeLabel = nowLabel(),
                 tone = MessageTone.Info
               )
@@ -813,6 +938,10 @@ class MainViewModel(
           )
         }
       }.onFailure { error ->
+        if (isSessionExpired(error)) {
+          expireSession()
+          return@onFailure
+        }
         _uiState.update {
           it.copy(
             queryForm = it.queryForm.copy(loading = false, result = null, resultBarcode = barcode),
@@ -835,13 +964,14 @@ class MainViewModel(
       val latestState = _uiState.value
       val normalizedForm = latestState.formState.normalized()
 
-      if (operation == PdaOperation.DirectOutbound) {
-        submitOutboundWorkOrder(normalizedForm, latestState.outboundLines)
-        return@launch
-      }
-
       val barcodes = latestState.barcodeLists[operation].orEmpty()
       val reviews = latestState.barcodeReviews[operation].orEmpty()
+
+      val contextError = trackingContextError(operation, normalizedForm)
+      if (contextError != null) {
+        _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, contextError)) }
+        return@launch
+      }
 
       if (operation != PdaOperation.FactoryInbound && barcodes.isEmpty()) {
         _uiState.update { it.copy(message = StatusMessage(MessageTone.Error, "请先扫描条码")) }
@@ -881,7 +1011,7 @@ class MainViewModel(
         submitByOperation(operation, normalizedForm, barcodes, UUID.randomUUID().toString())
       }.onSuccess { result ->
         repository.clearPendingSubmission()
-        val itemCount = result.quantity ?: result.items.size
+        val itemCount = result.quantity
         _uiState.update { state ->
           state.copy(
             route = AppRoute.Main(MainTab.Home),
@@ -908,13 +1038,15 @@ class MainViewModel(
         }
         loadMasterData()
       }.onFailure { error ->
+        if (isSessionExpired(error)) {
+          expireSession()
+          return@onFailure
+        }
         val retainPending = shouldRetainPendingSubmission(error)
         if (!retainPending) repository.clearPendingSubmission()
         _uiState.update {
           it.copy(
             submitting = it.submitting + (operation to false),
-            route = if (error is ApiRequestException && error.statusCode == 401) AppRoute.Login else it.route,
-            currentUser = if (error is ApiRequestException && error.statusCode == 401) null else it.currentUser,
             pendingSubmission = if (retainPending) repository.getPendingSubmission() else null,
             message = StatusMessage(
               if (retainPending) MessageTone.Info else MessageTone.Error,
@@ -945,7 +1077,7 @@ class MainViewModel(
         repository.retryPendingSubmission(_uiState.value.loginForm.serverUrl, pending)
       }.onSuccess { result ->
         repository.clearPendingSubmission()
-        val itemCount = result.quantity ?: result.items.size
+        val itemCount = result.quantity
         _uiState.update {
           it.copy(
             route = AppRoute.Main(MainTab.Home),
@@ -957,12 +1089,14 @@ class MainViewModel(
         }
         loadMasterData()
       }.onFailure { error ->
+        if (isSessionExpired(error)) {
+          expireSession()
+          return@onFailure
+        }
         val retainPending = shouldRetainPendingSubmission(error)
         if (!retainPending) repository.clearPendingSubmission()
         _uiState.update {
           it.copy(
-            route = if (error is ApiRequestException && error.statusCode == 401) AppRoute.Login else it.route,
-            currentUser = if (error is ApiRequestException && error.statusCode == 401) null else it.currentUser,
             pendingSubmission = if (retainPending) pending else null,
             pendingSubmissionRetrying = false,
             message = StatusMessage(
@@ -1135,13 +1269,15 @@ class MainViewModel(
       }
       loadMasterData()
     }.onFailure { error ->
+      if (isSessionExpired(error)) {
+        expireSession()
+        return@onFailure
+      }
       val retainPending = shouldRetainPendingSubmission(error)
       if (!retainPending) repository.clearPendingSubmission()
       _uiState.update {
         it.copy(
           submitting = it.submitting + (PdaOperation.DirectOutbound to false),
-          route = if (error is ApiRequestException && error.statusCode == 401) AppRoute.Login else it.route,
-          currentUser = if (error is ApiRequestException && error.statusCode == 401) null else it.currentUser,
           pendingSubmission = if (retainPending) repository.getPendingSubmission() else null,
           message = StatusMessage(
             if (retainPending) MessageTone.Info else MessageTone.Error,
@@ -1203,6 +1339,10 @@ class MainViewModel(
           )
         }
       }.onFailure { error ->
+        if (isSessionExpired(error)) {
+          expireSession()
+          return@onFailure
+        }
         _uiState.update {
           it.copy(
             loadingMasterData = false,
@@ -1218,7 +1358,7 @@ class MainViewModel(
     formState: OperationFormState,
     barcodes: List<String>,
     clientRequestId: String
-  ): SubmitResult {
+  ): SubmissionReceipt {
     val serverUrl = _uiState.value.loginForm.serverUrl
     return when (operation) {
       PdaOperation.FactoryInbound -> {
@@ -1233,7 +1373,9 @@ class MainViewModel(
         )
         val pending = repository.savePendingSubmission(WarehouseRepository.PENDING_INBOUND, clientRequestId, request, operation.title)
         _uiState.update { it.copy(pendingSubmission = pending) }
-        repository.submitInbound(serverUrl, request)
+        repository.submitInbound(serverUrl, request).let { result ->
+          SubmissionReceipt(result.orderId, result.quantity ?: result.items.size)
+        }
       }
 
       PdaOperation.TerminalInbound -> {
@@ -1249,21 +1391,48 @@ class MainViewModel(
         )
         val pending = repository.savePendingSubmission(WarehouseRepository.PENDING_INBOUND, clientRequestId, request, operation.title)
         _uiState.update { it.copy(pendingSubmission = pending) }
-        repository.submitInbound(serverUrl, request)
+        repository.submitInbound(serverUrl, request).let { result ->
+          SubmissionReceipt(result.orderId, result.quantity ?: result.items.size)
+        }
       }
 
-      PdaOperation.DirectOutbound -> error("扫码出库应使用出库单提交")
-
-      PdaOperation.SalesReturn -> {
-        val request = SalesReturnSubmitRequest(
-          returnWarehouseId = formState.returnWarehouseId,
-          returnLocationId = formState.returnLocationId,
+      PdaOperation.DirectOutbound -> {
+        val request = TrackingOutboundSubmitRequest(
+          sourceWarehouseId = formState.directSourceWarehouseId,
+          destinationType = if (formState.directDestinationType == "warehouse") "warehouse" else "salesperson",
+          salespersonId = formState.directSalespersonId.takeIf { formState.directDestinationType != "warehouse" },
+          targetWarehouseId = formState.directTargetWarehouseId.takeIf { formState.directDestinationType == "warehouse" },
           barcodes = barcodes,
           clientRequestId = clientRequestId
         )
-        val pending = repository.savePendingSubmission(WarehouseRepository.PENDING_SALES_RETURN, clientRequestId, request, operation.title)
+        val pending = repository.savePendingSubmission(
+          WarehouseRepository.PENDING_TRACKING_OUTBOUND,
+          clientRequestId,
+          request,
+          operation.title
+        )
         _uiState.update { it.copy(pendingSubmission = pending) }
-        repository.submitSalesReturn(serverUrl, request)
+        repository.submitTrackingOutbound(serverUrl, request).let { result ->
+          SubmissionReceipt(result.orderId, result.quantity)
+        }
+      }
+
+      PdaOperation.SalesReturn -> {
+        val request = TrackingReturnSubmitRequest(
+          returnWarehouseId = formState.returnWarehouseId,
+          barcodes = barcodes,
+          clientRequestId = clientRequestId
+        )
+        val pending = repository.savePendingSubmission(
+          WarehouseRepository.PENDING_TRACKING_RETURN,
+          clientRequestId,
+          request,
+          operation.title
+        )
+        _uiState.update { it.copy(pendingSubmission = pending) }
+        repository.submitTrackingReturn(serverUrl, request).let { result ->
+          SubmissionReceipt(result.orderId, result.quantity)
+        }
       }
     }
   }
@@ -1283,15 +1452,30 @@ class MainViewModel(
     _uiState.update {
       val currentTokens = it.barcodeValidationTokens[operation].orEmpty()
       val currentBarcodes = it.barcodeLists[operation].orEmpty().toSet()
-      val applicable = mapped.filterKeys { barcode ->
+      val expectedBarcodes = currentTokens.filterValues { token -> token == validationToken }.keys.intersect(currentBarcodes)
+      val missing = (expectedBarcodes - mapped.keys).associateWith {
+        ReviewState(
+          label = "校验失败",
+          detail = "服务器未返回该条码的校验结果，请删除后重新扫描",
+          isValid = false
+        )
+      }
+      val applicable = (mapped + missing).filterKeys { barcode ->
         barcode in currentBarcodes && currentTokens[barcode] == validationToken
       }
       val nextReviews = it.barcodeReviews[operation].orEmpty() + applicable
+      val validCount = currentBarcodes.count { barcode -> nextReviews[barcode]?.isValid == true }
+      val hasError = applicable.values.any { review -> !review.isValid }
       it.copy(
         barcodeReviews = it.barcodeReviews + (operation to nextReviews),
-        scanSoundCue = ScanSoundCue(
-          tone = if (results.all { result -> result.ok }) ScanSoundTone.Success else ScanSoundTone.Error
-        )
+        scanSoundCue = if (applicable.isEmpty()) {
+          it.scanSoundCue
+        } else {
+          ScanSoundCue(
+            tone = if (hasError) ScanSoundTone.Error else ScanSoundTone.Success,
+            announcement = scanAnnouncement(validCount, hasError)
+          )
+        }
       )
     }
   }
@@ -1357,6 +1541,26 @@ class MainViewModel(
     }
   }
 
+  private fun buildTrackingValidationRequest(
+    operation: PdaOperation,
+    formState: OperationFormState,
+    barcodes: List<String>
+  ): TrackingValidationRequest {
+    return when (operation) {
+      PdaOperation.DirectOutbound -> TrackingValidationRequest(
+        mode = "outbound",
+        barcodes = barcodes,
+        sourceWarehouseId = formState.directSourceWarehouseId
+      )
+      PdaOperation.SalesReturn -> TrackingValidationRequest(
+        mode = "return",
+        barcodes = barcodes,
+        returnWarehouseId = formState.returnWarehouseId
+      )
+      else -> error("该业务不使用流向追踪校验")
+    }
+  }
+
   fun canOperate(): Boolean {
     val roles = _uiState.value.currentUser?.roles.orEmpty().map { it.code }
     return roles.contains("SUPER_ADMIN") || roles.contains("WAREHOUSE_ADMIN")
@@ -1382,8 +1586,8 @@ class MainViewModel(
         .distinct()
     }
 
-    private fun defaultTabFor(operation: PdaOperation): MainTab {
-      return if (operation.group == OperationGroup.Inbound) MainTab.Inbound else MainTab.Outbound
+    private fun defaultTabFor(@Suppress("UNUSED_PARAMETER") operation: PdaOperation): MainTab {
+      return MainTab.Home
     }
 
     private fun pushRecentActivity(
@@ -1393,9 +1597,18 @@ class MainViewModel(
       return listOf(next) + current.take(7)
     }
 
-    private fun describeInventoryResult(result: InventoryDetailResult): String {
-      val ownerLabel = if (result.item.ownerType == "warehouse") "仓库存中" else "销售人员名下"
-      return "${result.item.barcode}，当前在$ownerLabel"
+    private fun describeTrackingResult(result: TrackingDetailResult): String {
+      val ownerLabel = when (result.item.currentOwnerType) {
+        "warehouse" -> "仓库"
+        "terminal_store" -> result.item.terminalStoreName ?: "终端店铺"
+        else -> "销售人员"
+      }
+      val receiptLabel = when (result.item.receiptStatus) {
+        "signed" -> "已签收"
+        "exception" -> "签收异常"
+        else -> "待签收"
+      }
+      return "${result.item.barcode}，当前归属 $ownerLabel，$receiptLabel"
     }
 
     private fun normalizePositiveInt(value: String): Int? {
@@ -1495,4 +1708,40 @@ private fun OperationFormState.normalized(): OperationFormState {
     factoryQuantity = factoryQuantity.trim(),
     terminalProductionDate = terminalProductionDate.trim()
   )
+}
+
+private fun OperationFormState.outboundContext(): List<String> {
+  return listOf(
+    directSourceWarehouseId,
+    directDestinationType,
+    directTargetWarehouseId.takeIf { directDestinationType == "warehouse" }.orEmpty(),
+    directSalespersonId.takeIf { directDestinationType != "warehouse" }.orEmpty()
+  )
+}
+
+internal fun trackingContextError(operation: PdaOperation, form: OperationFormState): String? {
+  return when (operation) {
+    PdaOperation.DirectOutbound -> when {
+      form.directSourceWarehouseId.isBlank() -> "请选择出库仓库"
+      form.directDestinationType == "warehouse" && form.directTargetWarehouseId.isBlank() -> "请选择目标仓库"
+      form.directDestinationType == "warehouse" && form.directTargetWarehouseId == form.directSourceWarehouseId -> "目标仓库不能与出库仓库相同"
+      form.directDestinationType != "warehouse" && form.directSalespersonId.isBlank() -> "请选择销售人员"
+      else -> null
+    }
+    PdaOperation.SalesReturn -> if (form.returnWarehouseId.isBlank()) "请选择回库仓库" else null
+    else -> null
+  }
+}
+
+internal fun scanAnnouncement(validCount: Int, hasError: Boolean): String {
+  return if (hasError) {
+    "扫码错误，当前有效 $validCount 件"
+  } else {
+    "已扫 $validCount 件"
+  }
+}
+
+private fun AppUiState.validBarcodeCount(operation: PdaOperation): Int {
+  val reviews = barcodeReviews[operation].orEmpty()
+  return barcodeLists[operation].orEmpty().count { barcode -> reviews[barcode]?.isValid == true }
 }

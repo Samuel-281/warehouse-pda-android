@@ -21,8 +21,8 @@ android {
     applicationId = "com.warehouse.pda"
     minSdk = 26
     targetSdk = 35
-    versionCode = 7
-    versionName = "0.2.0"
+    versionCode = 8
+    versionName = "0.3.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://43.108.14.102/\"")

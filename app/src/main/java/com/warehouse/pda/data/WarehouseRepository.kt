@@ -5,6 +5,9 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.warehouse.pda.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import okhttp3.JavaNetCookieJar
 import okhttp3.OkHttpClient
@@ -35,6 +38,8 @@ class WarehouseRepository(context: Context) {
       }
     )
     .build()
+  private val _sessionExpiredEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+  val sessionExpiredEvents: SharedFlow<Unit> = _sessionExpiredEvents.asSharedFlow()
 
   @Volatile
   private var currentBaseUrl = ""
@@ -106,11 +111,19 @@ class WarehouseRepository(context: Context) {
     preferences.edit().remove(KEY_PENDING_SUBMISSION).apply()
   }
 
-  suspend fun retryPendingSubmission(serverUrl: String, pending: PendingSubmission): SubmitResult {
+  suspend fun retryPendingSubmission(serverUrl: String, pending: PendingSubmission): SubmissionReceipt {
     return when (pending.kind) {
-      PENDING_INBOUND -> submitInbound(serverUrl, gson.fromJson(pending.requestJson, InboundSubmitRequest::class.java))
-      PENDING_OUTBOUND -> submitOutbound(serverUrl, gson.fromJson(pending.requestJson, OutboundSubmitRequest::class.java))
-      PENDING_SALES_RETURN -> submitSalesReturn(serverUrl, gson.fromJson(pending.requestJson, SalesReturnSubmitRequest::class.java))
+      PENDING_INBOUND -> submitInbound(serverUrl, gson.fromJson(pending.requestJson, InboundSubmitRequest::class.java)).toReceipt()
+      PENDING_OUTBOUND -> submitOutbound(serverUrl, gson.fromJson(pending.requestJson, OutboundSubmitRequest::class.java)).toReceipt()
+      PENDING_SALES_RETURN -> submitSalesReturn(serverUrl, gson.fromJson(pending.requestJson, SalesReturnSubmitRequest::class.java)).toReceipt()
+      PENDING_TRACKING_OUTBOUND -> submitTrackingOutbound(
+        serverUrl,
+        gson.fromJson(pending.requestJson, TrackingOutboundSubmitRequest::class.java)
+      ).toReceipt()
+      PENDING_TRACKING_RETURN -> submitTrackingReturn(
+        serverUrl,
+        gson.fromJson(pending.requestJson, TrackingReturnSubmitRequest::class.java)
+      ).toReceipt()
       else -> throw IllegalArgumentException("无法识别待确认业务，请升级应用后重试")
     }
   }
@@ -143,9 +156,12 @@ class WarehouseRepository(context: Context) {
   suspend fun getCurrentUser(serverUrl: String): CurrentUser = execute(serverUrl) { me() }
 
   suspend fun login(serverUrl: String, username: String, password: String): CurrentUser =
-    execute(serverUrl) { login(LoginRequest(username = username, password = password)) }
+    execute(serverUrl, notifySessionExpiration = false) {
+      login(LoginRequest(username = username, password = password))
+    }
 
-  suspend fun logout(serverUrl: String): LogoutResult = execute(serverUrl) { logout() }
+  suspend fun logout(serverUrl: String): LogoutResult =
+    execute(serverUrl, notifySessionExpiration = false) { logout() }
 
   suspend fun getMasterData(serverUrl: String): WarehouseState = execute(serverUrl) { masterData() }
 
@@ -154,8 +170,25 @@ class WarehouseRepository(context: Context) {
     request: BarcodeValidationRequest
   ): List<BarcodeValidationResult> = execute(serverUrl) { validateBarcodes(request) }
 
+  suspend fun validateTrackingBarcodes(
+    serverUrl: String,
+    request: TrackingValidationRequest
+  ): List<BarcodeValidationResult> = execute<List<TrackingValidationResult>>(serverUrl) {
+    validateTrackingBarcodes(request)
+  }.map { result ->
+    BarcodeValidationResult(
+      barcode = result.barcode,
+      ok = result.ok,
+      label = result.label,
+      detail = result.detail
+    )
+  }
+
   suspend fun getInventoryDetail(serverUrl: String, barcode: String): InventoryDetailResult =
     execute(serverUrl) { inventoryDetail(barcode) }
+
+  suspend fun getTrackingDetail(serverUrl: String, barcode: String): TrackingDetailResult =
+    execute(serverUrl) { trackingDetail(barcode) }
 
   suspend fun getPdaReleaseInfo(serverUrl: String): PdaReleaseInfo =
     execute(serverUrl) { pdaReleaseInfo() }
@@ -169,8 +202,19 @@ class WarehouseRepository(context: Context) {
   suspend fun submitSalesReturn(serverUrl: String, request: SalesReturnSubmitRequest): SubmitResult =
     execute(serverUrl) { submitSalesReturn(request) }
 
+  suspend fun submitTrackingOutbound(
+    serverUrl: String,
+    request: TrackingOutboundSubmitRequest
+  ): TrackingSubmitResult = execute(serverUrl) { submitTrackingOutbound(request) }
+
+  suspend fun submitTrackingReturn(
+    serverUrl: String,
+    request: TrackingReturnSubmitRequest
+  ): TrackingSubmitResult = execute(serverUrl) { submitTrackingReturn(request) }
+
   private suspend fun <T> execute(
     serverUrl: String,
+    notifySessionExpiration: Boolean = true,
     block: suspend WarehouseApi.() -> Response<ApiEnvelope<T>>
   ): T = withContext(Dispatchers.IO) {
     val response = try {
@@ -188,6 +232,9 @@ class WarehouseRepository(context: Context) {
     }
 
     val errorText = body?.error ?: parseError(response) ?: "请求失败"
+    if (response.code() == 401 && notifySessionExpiration) {
+      _sessionExpiredEvents.tryEmit(Unit)
+    }
     throw ApiRequestException(response.code(), errorText)
   }
 
@@ -233,8 +280,20 @@ class WarehouseRepository(context: Context) {
     const val PENDING_INBOUND = "inbound"
     const val PENDING_OUTBOUND = "outbound"
     const val PENDING_SALES_RETURN = "sales_return"
+    const val PENDING_TRACKING_OUTBOUND = "tracking_outbound"
+    const val PENDING_TRACKING_RETURN = "tracking_return"
   }
 }
+
+private fun SubmitResult.toReceipt() = SubmissionReceipt(
+  orderId = orderId,
+  quantity = quantity ?: items.size
+)
+
+private fun TrackingSubmitResult.toReceipt() = SubmissionReceipt(
+  orderId = orderId,
+  quantity = quantity
+)
 
 class ApiRequestException(
   val statusCode: Int,
@@ -260,6 +319,10 @@ fun shouldRetainPendingSubmission(error: Throwable): Boolean {
   return false
 }
 
+fun isSessionExpired(error: Throwable): Boolean {
+  return error is ApiRequestException && error.statusCode == 401
+}
+
 private interface WarehouseApi {
   @GET("api/health")
   suspend fun health(): Response<ApiEnvelope<HealthStatus>>
@@ -281,10 +344,20 @@ private interface WarehouseApi {
     @Body body: BarcodeValidationRequest
   ): Response<ApiEnvelope<List<BarcodeValidationResult>>>
 
+  @POST("api/tracking/validate")
+  suspend fun validateTrackingBarcodes(
+    @Body body: TrackingValidationRequest
+  ): Response<ApiEnvelope<List<TrackingValidationResult>>>
+
   @GET("api/inventory/{barcode}")
   suspend fun inventoryDetail(
     @retrofit2.http.Path("barcode") barcode: String
   ): Response<ApiEnvelope<InventoryDetailResult>>
+
+  @GET("api/tracking/{barcode}")
+  suspend fun trackingDetail(
+    @retrofit2.http.Path("barcode") barcode: String
+  ): Response<ApiEnvelope<TrackingDetailResult>>
 
   @GET("api/pda-release")
   suspend fun pdaReleaseInfo(): Response<ApiEnvelope<PdaReleaseInfo>>
@@ -303,4 +376,14 @@ private interface WarehouseApi {
   suspend fun submitSalesReturn(
     @Body body: SalesReturnSubmitRequest
   ): Response<ApiEnvelope<SubmitResult>>
+
+  @POST("api/tracking/outbound")
+  suspend fun submitTrackingOutbound(
+    @Body body: TrackingOutboundSubmitRequest
+  ): Response<ApiEnvelope<TrackingSubmitResult>>
+
+  @POST("api/tracking/return")
+  suspend fun submitTrackingReturn(
+    @Body body: TrackingReturnSubmitRequest
+  ): Response<ApiEnvelope<TrackingSubmitResult>>
 }

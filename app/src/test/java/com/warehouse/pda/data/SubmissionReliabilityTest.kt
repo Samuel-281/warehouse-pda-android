@@ -30,4 +30,11 @@ class SubmissionReliabilityTest {
     assertFalse(SubmissionPolicy.accepts(existingCount = 499, incomingCount = 2))
     assertEquals(1, SubmissionPolicy.remainingCapacity(499))
   }
+
+  @Test
+  fun recognizesOnlyUnauthorizedResponsesAsExpiredSessions() {
+    assertTrue(isSessionExpired(ApiRequestException(401, "请重新登录")))
+    assertFalse(isSessionExpired(ApiRequestException(403, "无权限")))
+    assertFalse(isSessionExpired(NetworkRequestException("断网", RuntimeException())))
+  }
 }

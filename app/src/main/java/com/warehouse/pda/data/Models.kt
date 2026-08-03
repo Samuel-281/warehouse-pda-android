@@ -116,6 +116,54 @@ data class InventoryDetailResult(
   val movements: List<StockMovement>
 )
 
+data class TrackedBarcode(
+  val id: String,
+  val barcode: String,
+  val externalGoodsName: String? = null,
+  val goodsUnit: String? = null,
+  val currentOwnerType: String,
+  val warehouseId: String? = null,
+  val salespersonId: String? = null,
+  val terminalStoreName: String? = null,
+  val receiptStatus: String,
+  val status: String,
+  val signedAt: String? = null,
+  val lastMovedAt: String
+)
+
+data class TrackingMovement(
+  val id: String,
+  val barcode: String,
+  val type: String,
+  val fromOwnerType: String? = null,
+  val toOwnerType: String,
+  val fromLabel: String,
+  val toLabel: String,
+  val operator: String,
+  val occurredAt: String,
+  val note: String,
+  val orderId: String? = null,
+  val orderNo: String? = null
+)
+
+data class TerminalReceiptRecord(
+  val id: String,
+  val barcode: String,
+  val scannedAt: String,
+  val scannerName: String,
+  val externalGoodsName: String,
+  val goodsUnit: String,
+  val receivingOrganizationName: String,
+  val matchStatus: String,
+  val importedAt: String
+)
+
+data class TrackingDetailResult(
+  val item: TrackedBarcode,
+  val movements: List<TrackingMovement>,
+  val terminalReceipts: List<TerminalReceiptRecord> = emptyList()
+)
+
 data class BarcodeValidationRequest(
   val mode: String,
   val barcodes: List<String>,
@@ -129,6 +177,21 @@ data class BarcodeValidationResult(
   val label: String,
   val detail: String,
   val item: InventoryItem? = null
+)
+
+data class TrackingValidationRequest(
+  val mode: String,
+  val barcodes: List<String>,
+  val sourceWarehouseId: String? = null,
+  val returnWarehouseId: String? = null
+)
+
+data class TrackingValidationResult(
+  val barcode: String,
+  val ok: Boolean,
+  val label: String,
+  val detail: String,
+  val item: TrackedBarcode? = null
 )
 
 data class LoginRequest(
@@ -185,6 +248,21 @@ data class SalesReturnSubmitRequest(
   val clientRequestId: String? = null
 )
 
+data class TrackingOutboundSubmitRequest(
+  val sourceWarehouseId: String,
+  val destinationType: String,
+  val salespersonId: String? = null,
+  val targetWarehouseId: String? = null,
+  val barcodes: List<String>,
+  val clientRequestId: String? = null
+)
+
+data class TrackingReturnSubmitRequest(
+  val returnWarehouseId: String,
+  val barcodes: List<String>,
+  val clientRequestId: String? = null
+)
+
 data class PendingSubmission(
   val kind: String,
   val requestId: String,
@@ -198,6 +276,19 @@ data class SubmitResult(
   val inboundOrderId: String? = null,
   val quantity: Int? = null,
   val items: List<InventoryItem>
+)
+
+data class TrackingSubmitResult(
+  val orderId: String,
+  val orderNo: String,
+  val quantity: Int,
+  val items: List<TrackedBarcode> = emptyList(),
+  val movements: List<TrackingMovement> = emptyList()
+)
+
+data class SubmissionReceipt(
+  val orderId: String,
+  val quantity: Int
 )
 
 data class PdaReleaseInfo(
