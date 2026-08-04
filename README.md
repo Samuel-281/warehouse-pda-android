@@ -7,7 +7,7 @@
 - Kotlin + Jetpack Compose
 - Retrofit + OkHttp
 - Android 8.0 及以上（`minSdk 26`）
-- 当前版本：`0.3.0`（`versionCode 8`）
+- 当前版本：`0.3.1`（`versionCode 9`）
 - 默认服务器：`http://43.108.14.102/`
 
 应用登录前会访问 `/api/health`，只有数据库正常且 API 合约版本为 `1` 时才允许登录。服务器地址仍可在登录页修改，但必须是合法的 `http://` 或 `https://` 地址。
@@ -69,4 +69,4 @@ keyPassword=...
 ./gradlew :app:assembleRelease
 ```
 
-`v0.1.x` 使用 Debug 签名，不能直接覆盖安装正式签名版。已经安装 `v0.2.0` 正式版的设备可以直接覆盖升级到 `v0.3.0`；首次从旧 Debug 版升级时仍需卸载重装一次。
+`v0.1.x` 使用 Debug 签名，不能直接覆盖安装正式签名版。已经安装 `v0.2.0` 或 `v0.3.0` 正式版的设备可以直接覆盖升级到 `v0.3.1`；首次从旧 Debug 版升级时仍需卸载重装一次。
